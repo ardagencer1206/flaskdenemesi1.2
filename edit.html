@@ -1,3 +1,4 @@
+```html
 <!doctype html>
 <html lang="tr" data-bs-theme="light">
 <head>
@@ -69,6 +70,7 @@
             <div class="mb-3">
               <label for="cities" class="form-label">Şehirler (JSON dizi)</label>
               <input id="cities" class="form-control" placeholder='["İstanbul","Ankara","İzmir"]' />
+              <div class="form-text">Araç başlangıç konumları bu listedeki şehirlerden seçilir.</div>
             </div>
 
             <div class="row g-3 mb-3">
@@ -90,6 +92,20 @@
             <div class="mb-3">
               <label for="vehicle_count" class="form-label">Araç Sayıları (JSON)</label>
               <textarea id="vehicle_count" class="form-control" rows="4" placeholder='{"Küçük": 2, "Orta": 1}'></textarea>
+              <div class="form-text">Araç listesi bu alandan türetilir: örn. <code>Küçük_1, Küçük_2, Orta_1</code>.</div>
+            </div>
+
+            <!-- Dinamik: Araç Başlangıç Konumları -->
+            <div class="mb-3">
+              <div class="d-flex align-items-center justify-content-between">
+                <label class="form-label mb-0">Araç Başlangıç Konumları</label>
+                <div class="d-flex gap-2">
+                  <button id="fillDepotBtn" type="button" class="btn btn-sm btn-outline-secondary">Hepsini Ana Depo Yap</button>
+                  <button id="rebuildVehiclesBtn" type="button" class="btn btn-sm btn-outline-primary">Araç Listesini Yenile</button>
+                </div>
+              </div>
+              <div id="vehicleLocWrap" class="table-responsive mt-2"></div>
+              <div class="form-text">Her aracın başlangıç şehrini seçin. Belirtilmeyenler kayıtta otomatik ana depoya çekilir.</div>
             </div>
 
             <div class="mb-3">
@@ -140,6 +156,74 @@
     try{ return JSON.parse($(id).value); }catch(e){ throw new Error(`${name} geçerli JSON olmalı: ${e.message}`); }
   }
 
+  // Araç ID listesi üret: {"Küçük":2,"Orta":1} -> ["Küçük_1","Küçük_2","Orta_1"]
+  function makeVehicleIds(vehicle_count){
+    const out = [];
+    for(const [typ, cnt] of Object.entries(vehicle_count||{})){
+      const n = parseInt(cnt,10) || 0;
+      for(let i=1;i<=n;i++) out.push(`${typ}_${i}`);
+    }
+    return out;
+  }
+
+  // Araç konumları tablosunu çiz
+  function renderVehicleLocationsTable(){
+    let cities=[], vcount={}, mainDepot="", existing={};
+    try{ cities = JSON.parse($("cities").value); }catch(_){}
+    try{ vcount = JSON.parse($("vehicle_count").value); }catch(_){}
+    mainDepot = $("main_depot").value.trim();
+    try{ existing = window.__vehInitLoc || {}; }catch(_){ existing = {}; }
+
+    const vehicles = makeVehicleIds(vcount);
+    const wrap = $("vehicleLocWrap");
+    if(!wrap){ return; }
+
+    // Seçenekler
+    const opts = (cities||[]).map(c=>`<option value="${c}">${c}</option>`).join("");
+
+    // Tablo
+    let html = `<table class="table table-sm table-hover align-middle mb-0">
+      <thead class="table-light"><tr><th style="width:40%">Araç</th><th style="width:60%">Başlangıç Şehri</th></tr></thead><tbody>`;
+    if(!vehicles.length){
+      html += `<tr><td colspan="2" class="text-secondary">Araç yok. Önce “Araç Sayıları” alanını doldurun.</td></tr>`;
+    } else {
+      for(const v of vehicles){
+        const current = existing[v] && (cities||[]).includes(existing[v]) ? existing[v] : (mainDepot || (cities[0]||""));
+        html += `<tr>
+          <td class="fw-semibold">${v}</td>
+          <td>
+            <select id="vehloc_${v}" class="form-select form-select-sm">
+              ${opts}
+            </select>
+          </td>
+        </tr>`;
+      }
+    }
+    html += `</tbody></table>`;
+    wrap.innerHTML = html;
+
+    // Set selected values
+    for(const v of vehicles){
+      const sel = $("vehloc_"+v);
+      if(sel){
+        const val = (existing[v] && cities.includes(existing[v])) ? existing[v] : (mainDepot || (cities[0]||""));
+        if(val) sel.value = val;
+      }
+    }
+  }
+
+  // Mevcut select'lardan JSON oluştur
+  function collectVehicleInitialLocations(){
+    let vcount={}; try{ vcount = JSON.parse($("vehicle_count").value); }catch(_){}
+    const vehicles = makeVehicleIds(vcount);
+    const out = {};
+    for(const v of vehicles){
+      const sel = $("vehloc_"+v);
+      if(sel && sel.value) out[v] = sel.value;
+    }
+    return out;
+  }
+
   function buildJSON(){
     const data = {
       cities: parseJSONField("cities","Şehirler"),
@@ -147,12 +231,17 @@
       periods: parseInt($("periods").value,10),
       vehicle_types: parseJSONField("vehicle_types","Araç Tipleri"),
       vehicle_count: parseJSONField("vehicle_count","Araç Sayıları"),
+      vehicle_initial_locations: collectVehicleInitialLocations(),
       distances: parseJSONField("distances","Mesafeler"),
       packages: parseJSONField("packages","Paketler"),
       minutil_penalty: parseFloat($("minutil_penalty").value)
     };
     if(!data.main_depot) throw new Error("Ana Depo boş olamaz.");
     if(!Number.isFinite(data.periods) || data.periods<1) throw new Error("Dönem sayısı 1 veya daha büyük olmalı.");
+    // Güvenlik: şehir doğrulaması (seçilmiş şehir listede yoksa ana depoya çek)
+    for(const [k,city] of Object.entries(data.vehicle_initial_locations||{})){
+      if(!(data.cities||[]).includes(city)) data.vehicle_initial_locations[k] = data.main_depot;
+    }
     return data;
   }
 
@@ -175,6 +264,11 @@
       $("distances").value = JSON.stringify(data.distances ?? [], null, 2);
       $("packages").value = JSON.stringify(data.packages ?? [], null, 2);
       $("minutil_penalty").value = (data.minutil_penalty ?? 10).toString();
+
+      // Araç konumları state'i ve tablo
+      window.__vehInitLoc = data.vehicle_initial_locations || {};
+      renderVehicleLocationsTable();
+
       refreshPreview();
       setStatus("Dataset yüklendi ✔️", "success");
     }catch(err){
@@ -205,6 +299,7 @@
     catch(e){ $("preview").textContent = "Önizleme derlenemedi:\n"+e.message; }
   }
 
+  // UI eventleri
   $("reloadBtn")?.addEventListener("click", loadDataset);
   $("refreshPreviewBtn")?.addEventListener("click", refreshPreview);
   $("saveBtn")?.addEventListener("click", ()=> saveDataset(false));
@@ -220,6 +315,37 @@
     }catch(e){ setStatus("JSON indirilemedi: "+e.message, "danger"); }
   });
 
+  // Araç listesi değiştiğinde konum seçimlerini yeniden üret
+  $("vehicle_count")?.addEventListener("input", ()=>{
+    // mevcut seçimleri sakla
+    try{ window.__vehInitLoc = collectVehicleInitialLocations(); }catch(_){}
+    renderVehicleLocationsTable();
+  });
+  // Şehir listesi ya da ana depo değişince seçenekleri/varsayılanları güncelle
+  $("cities")?.addEventListener("input", renderVehicleLocationsTable);
+  $("main_depot")?.addEventListener("input", renderVehicleLocationsTable);
+
+  // Hepsini ana depoya set et
+  $("fillDepotBtn")?.addEventListener("click", ()=>{
+    const depot = $("main_depot").value.trim();
+    let vcount={}; try{ vcount = JSON.parse($("vehicle_count").value); }catch(_){}
+    const vehicles = makeVehicleIds(vcount);
+    for(const v of vehicles){
+      const sel = $("vehloc_"+v);
+      if(sel && depot) sel.value = depot;
+    }
+    // state'i de güncelle
+    window.__vehInitLoc = collectVehicleInitialLocations();
+    refreshPreview();
+  });
+
+  // Araç listesini elle yenile (buton)
+  $("rebuildVehiclesBtn")?.addEventListener("click", ()=>{
+    try{ window.__vehInitLoc = collectVehicleInitialLocations(); }catch(_){}
+    renderVehicleLocationsTable();
+    refreshPreview();
+  });
+
   (function(){
     const html=document.documentElement, toggle=document.getElementById("themeToggle"), iconSun=document.getElementById("iconSun"), iconMoon=document.getElementById("iconMoon");
     function apply(theme){ html.setAttribute('data-bs-theme', theme); const isLight=(theme==='light'); iconSun&&iconSun.classList.toggle('d-none',!isLight); iconMoon&&iconMoon.classList.toggle('d-none',isLight); try{localStorage.setItem('ui-theme',theme);}catch(_){}} 
@@ -233,3 +359,4 @@
   </script>
 </body>
 </html>
+```
