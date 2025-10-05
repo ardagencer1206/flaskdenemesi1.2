@@ -10,19 +10,21 @@
     "Küçük": 2,
     "Orta": 1
   },
+  "vehicle_initial_locations": {
+    "Küçük_1": "Ankara",
+    "Küçük_2": "Bursa",
+    "Orta_1":  "Eskişehir"
+  },
   "distances": [
     ["İstanbul","Ankara",450],
     ["İstanbul","İzmir",330],
     ["İstanbul","Bursa",150],
     ["İstanbul","Eskişehir",325],
-
     ["Ankara","İzmir",590],
     ["Ankara","Bursa",390],
     ["Ankara","Eskişehir",230],
-
     ["İzmir","Bursa",330],
     ["İzmir","Eskişehir",410],
-
     ["Bursa","Eskişehir",150]
   ],
   "packages": [
