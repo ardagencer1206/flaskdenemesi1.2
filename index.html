@@ -117,7 +117,13 @@
 
             <div class="mb-3">
               <label for="vehicle_count" class="form-label">Araç Sayıları (JSON)</label>
-              <textarea id="vehicle_count" class="form-control" rows="4" placeholder='{"Küçük": 2, "Orta": 1}' readonly></textarea>
+              <textarea id="vehicle_count" class="form-control" rows="3" placeholder='{"Küçük": 2, "Orta": 1}' readonly></textarea>
+            </div>
+
+            <div class="mb-3">
+              <label for="vehicle_initial_locations" class="form-label">Araç Konumları (JSON)</label>
+              <textarea id="vehicle_initial_locations" class="form-control" rows="3" placeholder='{"Küçük_1":"Ankara","Küçük_2":"Bursa","Orta_1":"Eskişehir"}' readonly></textarea>
+              <div class="form-text">Araç sayısına göre her aracın başlangıç şehri. Belirtilmeyenler varsayılan olarak ana depoda başlar.</div>
             </div>
 
             <div class="mb-3">
@@ -140,36 +146,35 @@
                   <button id="solveBtn" class="btn btn-primary flex-fill">Çöz (Sunucu dataset’i ile)</button>
                   <button class="btn btn-outline-secondary flex-fill" type="button"
                           data-bs-toggle="collapse" data-bs-target="#previewWrap">Önizleme</button>
-<button
-  class="btn"
-  type="button"
-  data-bs-toggle="collapse"
-  data-bs-target="#chatWrap"
-  aria-label="Chat"
-  style="
-    --btn-bg: linear-gradient(135deg, rgba(13,110,253,.12), rgba(111,66,193,.12));
-    --btn-bd: rgba(0,0,0,.15);
-    --btn-tx: var(--bs-body-color);
-    display:inline-flex; align-items:center; gap:.5rem;
-    border:1px solid var(--btn-bd);
-    background: var(--btn-bg);
-    color: var(--btn-tx);
-    border-radius: 14px;
-    padding:.55rem .95rem;
-    font-weight: 600;
-    letter-spacing:.2px;
-    box-shadow: 0 6px 18px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.15);
-    backdrop-filter: saturate(1.15) blur(6px);
-    -webkit-backdrop-filter: saturate(1.15) blur(6px);
-    transition: transform .15s ease, box-shadow .15s ease, background .2s ease;
-  "
-  onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 10px 24px rgba(13,110,253,.18)'; this.style.background='linear-gradient(135deg, rgba(13,110,253,.18), rgba(111,66,193,.18))';"
-  onmouseout="this.style.transform='none'; this.style.boxShadow='0 6px 18px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.15)'; this.style.background='var(--btn-bg)';"
->
-  <i class="bi bi-chat-dots-fill" style="font-size:1.05rem;"></i>
-  <span>Chat</span>
-</button>
-
+                  <button
+                    class="btn"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#chatWrap"
+                    aria-label="Chat"
+                    style="
+                      --btn-bg: linear-gradient(135deg, rgba(13,110,253,.12), rgba(111,66,193,.12));
+                      --btn-bd: rgba(0,0,0,.15);
+                      --btn-tx: var(--bs-body-color);
+                      display:inline-flex; align-items:center; gap:.5rem;
+                      border:1px solid var(--btn-bd);
+                      background: var(--btn-bg);
+                      color: var(--btn-tx);
+                      border-radius: 14px;
+                      padding:.55rem .95rem;
+                      font-weight: 600;
+                      letter-spacing:.2px;
+                      box-shadow: 0 6px 18px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.15);
+                      backdrop-filter: saturate(1.15) blur(6px);
+                      -webkit-backdrop-filter: saturate(1.15) blur(6px);
+                      transition: transform .15s ease, box-shadow .15s ease, background .2s ease;
+                    "
+                    onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 10px 24px rgba(13,110,253,.18)'; this.style.background='linear-gradient(135deg, rgba(13,110,253,.18), rgba(111,66,193,.18))';"
+                    onmouseout="this.style.transform='none'; this.style.boxShadow='0 6px 18px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.15)'; this.style.background='var(--btn-bg)';"
+                  >
+                    <i class="bi bi-chat-dots-fill" style="font-size:1.05rem;"></i>
+                    <span>Chat</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -203,6 +208,7 @@
         <ul class="text-secondary mb-3">
           <li>“Dataset’i Güncelle” ile <code>edit.html</code>’de düzenleyip sunucudaki <code>dataset.json</code>’u kaydedin.</li>
           <li>Bu sayfa dataset’i otomatik yeniden yükler (Yeniden Yükle butonuyla da çağırabilirsiniz).</li>
+          <li><code>vehicle_initial_locations</code> ile her araç için başlangıç şehri verebilirsiniz. Belirtilmeyenler ana depoda başlar.</li>
         </ul>
 
         <!-- Preview Collapse -->
@@ -268,6 +274,7 @@
       periods: parseInt($("periods").value,10),
       vehicle_types: parse("vehicle_types","Araç Tipleri"),
       vehicle_count: parse("vehicle_count","Araç Sayıları"),
+      vehicle_initial_locations: parse("vehicle_initial_locations","Araç Konumları"),
       distances: parse("distances","Mesafeler"),
       packages: parse("packages","Paketler"),
       minutil_penalty: parseFloat($("minutil_penalty").value)
@@ -341,6 +348,7 @@
       $("periods").value = data.periods ?? 1;
       $("vehicle_types").value = JSON.stringify(data.vehicle_types ?? {}, null, 2);
       $("vehicle_count").value = JSON.stringify(data.vehicle_count ?? {}, null, 2);
+      $("vehicle_initial_locations").value = JSON.stringify(data.vehicle_initial_locations ?? {}, null, 2);
       $("distances").value = JSON.stringify(data.distances ?? [], null, 2);
       $("packages").value = JSON.stringify(data.packages ?? [], null, 2);
       $("minutil_penalty").value = (data.minutil_penalty ?? 10).toString();
@@ -374,7 +382,6 @@
 
   $("downloadBtn")?.addEventListener("click", async ()=>{
     try{
-      // mevcut dataset’i indir (read-only alanlardan)
       const json = JSON.stringify(buildReadOnlyJSON(), null, 2);
       const blob = new Blob([json], { type: "application/json;charset=utf-8" });
       const url  = URL.createObjectURL(blob);
@@ -425,4 +432,3 @@
   </script>
 </body>
 </html>
-
