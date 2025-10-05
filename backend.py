@@ -12,28 +12,17 @@ from pyomo.environ import (
 )
 from pyomo.opt import TerminationCondition
 from pathlib import Path
+
+# Dataset yolu (env ile özelleştirilebilir)
 DATASET_PATH = Path(os.environ.get("DATASET_PATH", str(Path(__file__).parent / "dataset.json")))
-
-
-
-
-
 
 MAX_SOLVE_SECONDS = 26  # işlemciye verdiğimiz süre
 app = Flask(__name__, static_url_path="", static_folder=".")
 
-# =======================
-# Dataset yolu (env ile özelleştirilebilir)
-# =======================
-
-
 # ---------------- Azure OpenAI Ayarları ----------------
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "d0167637046c4443badc4920cc612abb")
 AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "https://openai-fnss.openai.azure.com")
-# Azure portalda oluşturduğun "Deployment name"
-AZURE_DEPLOYMENT_NAME = os.environ.get("AZURE_DEPLOYMENT_NAME", "gpt-4o")  # <-- kendi deployment adını yaz
-
-# API versiyonu: hesabındaki modele uygun bir sürüm olmalı (Genelde 2024-xx)
+AZURE_DEPLOYMENT_NAME = os.environ.get("AZURE_DEPLOYMENT_NAME", "gpt-4o")
 AZURE_OPENAI_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-06-01")
 
 try:
@@ -60,7 +49,6 @@ def safe_float(x, default=0.0):
 def load_dataset_from_file() -> Dict[str, Any]:
     """
     dataset.json dosyasını okur ve dict döner.
-    DATASET_PATH env ile özelleştirilebilir.
     """
     try:
         with open(DATASET_PATH, "r", encoding="utf-8") as f:
@@ -80,12 +68,48 @@ def load_dataset_from_file() -> Dict[str, Any]:
         raise RuntimeError(f"dataset.json okunamadı: {e}")
 
 
+def _normalize_initial_locations(
+    vehicles: List[str],
+    cities: List[str],
+    main_depot: str,
+    payload: Dict[str, Any]
+) -> Dict[str, str]:
+    """
+    vehicle_initial_locations aşağıdaki iki formdan birini alabilir:
+      A) { "Küçük_1": "Ankara", "Orta_1": "İzmir", ... }  # doğrudan araç adına göre
+      B) { "Küçük": "Ankara", "Orta": "İzmir" }           # tipe göre, o tipteki tüm araçlara uygular
+    Verilmezse tüm araçlar main_depot'ta başlatılır.
+    Şehir doğrulaması yapar; hatalı şehirler sessizce main_depot'a döner.
+    """
+    raw = payload.get("vehicle_initial_locations", {}) or {}
+    init = {v: main_depot for v in vehicles}
+
+    if isinstance(raw, dict):
+        # araç adına göre eşleşenler
+        for k, city in raw.items():
+            if k in vehicles and city in cities:
+                init[k] = city
+        # tip adına göre eşleşenler
+        for k, city in raw.items():
+            if k not in vehicles and city in cities:
+                prefix = f"{k}_"
+                for v in vehicles:
+                    if v.startswith(prefix):
+                        init[v] = city
+
+    # son güvenlik
+    for v in vehicles:
+        if init.get(v) not in cities:
+            init[v] = main_depot
+
+    return init
+
+
 def pick_solver():
     """
     Önce Pyomo APPsi-HiGHS (highspy) denenir.
     Ardından klasik arayüzler (highs/cbc/glpk/cplex).
     Geriye (solver_adı, solver_nesnesi, is_appsi_bool) döner.
-    Tümünde MAX_SOLVE_SECONDS zaman limiti uygulanır.
     """
     # 1) APPsi-HiGHS (Python wrapper)
     try:
@@ -93,7 +117,6 @@ def pick_solver():
         s = AppsiHighs()
         try:
             s.config.time_limit = MAX_SOLVE_SECONDS
-            # s.config.mip_rel_gap = 0.05  # istersen ayrıca gap hedefi
         except Exception:
             pass
         return "appsi_highs", s, True
@@ -105,16 +128,15 @@ def pick_solver():
         try:
             s = SolverFactory(cand)
             if s is not None and s.available():
-                # Zaman limiti ve ilgili opsiyonlar (çözücüye göre anahtar isimleri farklı)
                 try:
                     if cand == "highs":
-                        s.options["time_limit"] = MAX_SOLVE_SECONDS             # float saniye
+                        s.options["time_limit"] = MAX_SOLVE_SECONDS
                     elif cand == "cbc":
-                        s.options["seconds"] = int(MAX_SOLVE_SECONDS)           # int saniye
+                        s.options["seconds"] = int(MAX_SOLVE_SECONDS)
                     elif cand == "glpk":
-                        s.options["tmlim"] = int(MAX_SOLVE_SECONDS)             # int saniye
+                        s.options["tmlim"] = int(MAX_SOLVE_SECONDS)
                     elif cand == "cplex":
-                        s.options["timelimit"] = MAX_SOLVE_SECONDS              # float saniye
+                        s.options["timelimit"] = MAX_SOLVE_SECONDS
                         s.options["mipgap"] = 0.05
                         s.options["threads"] = 2
                 except Exception:
@@ -132,14 +154,9 @@ def pick_solver():
 def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]:
     """
     Beklenen payload anahtarları:
-      cities: ["İstanbul","Ankara","İzmir"]
-      main_depot: "İstanbul"
-      periods: 6
-      vehicle_types: { "Küçük": {"kapasite":200,"maliyet_km":2.5,"sabit_maliyet":150,"min_doluluk":0.4}, ...}
-      vehicle_count: { "Küçük":2, "Orta":1 }
-      distances: [ ["İstanbul","Ankara",450], ["İstanbul","İzmir",330], ["Ankara","İzmir",590] ]
-      packages: [ {"id":"P1","baslangic":"Ankara","hedef":"İzmir","agirlik":80,"ready":1,"deadline_suresi":5,"ceza":100}, ...]
-      minutil_penalty: 10.0
+      cities, main_depot, periods, vehicle_types, vehicle_count,
+      distances, packages, minutil_penalty
+      (opsiyonel) vehicle_initial_locations
     """
     # --- Girdiler
     cities: List[str] = payload["cities"]
@@ -153,6 +170,9 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
 
     # Araç isimleri: Tip_index
     vehicles: List[str] = [f"{vt}_{i}" for vt, cnt in vehicle_count.items() for i in range(1, int(cnt) + 1)]
+
+    # Başlangıç konumları
+    init_loc = _normalize_initial_locations(vehicles, cities, main_depot, payload)
 
     # Mesafeler (simetrik tamamla)
     distances: Dict[Tuple[str, str], float] = {}
@@ -348,9 +368,9 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
         return sum(m.x[v, i, j, t] for i in m.Cities for j in m.Cities if i != j) <= 1
     model.vehicle_route_out = Constraint(model.Vehicles, model.Periods, rule=vehicle_one_move_rule)
 
-    # 15) Araç başlangıç konumu (t=Tmin’de ana depoda)
+    # 15) Araç başlangıç konumu (t=Tmin’de araç özelinde belirlenen şehirde)
     def vehicle_initial_loc_rule(m, v):
-        return m.loc[v, main_depot, Tmin] == 1
+        return m.loc[v, init_loc[v], Tmin] == 1
     model.vehicle_initial_location = Constraint(model.Vehicles, rule=vehicle_initial_loc_rule)
 
     # 16) Araç: her t’de tek şehir
@@ -404,7 +424,8 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
         "distances": distances,
         "vehicle_types": vehicle_types,
         "main_depot": main_depot,
-        "MINUTIL_PENALTY": MINUTIL_PENALTY
+        "MINUTIL_PENALTY": MINUTIL_PENALTY,
+        "initial_locations": init_loc
     }
     return model, meta
 
@@ -534,6 +555,7 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
 def root():
     return send_from_directory(".", "index.html")
 
+
 @app.route("/dataset", methods=["GET", "PUT", "POST"])
 def dataset_endpoint():
     """
@@ -565,11 +587,11 @@ def dataset_endpoint():
         if missing:
             return jsonify({"ok": False, "error": f"Eksik alanlar: {', '.join(missing)}"}), 400
 
-        # Dosyaya yaz
+        # Dosyaya yaz (atomic)
         tmp_path = DATASET_PATH.with_suffix(".json.tmp")
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        tmp_path.replace(DATASET_PATH)  # atomic replace
+        tmp_path.replace(DATASET_PATH)
 
         return jsonify({"ok": True, "message": "dataset.json güncellendi"})
 
@@ -591,7 +613,6 @@ def chat():
         user_messages = payload.get("messages", [])
         model_context = payload.get("context", {})
 
-        # Sistem mesajı: bağlam olarak model JSON’unu veriyoruz
         sys_prompt = f"""
 Sen bir lojistik optimizasyon asistanısın. Kullanıcıdan gelen VRP/çok duruşlu taşımacılık
 parametrelerini (şehirler, dönemler, ana depo, araç tip/sayıları, mesafeler, paketler,
@@ -606,7 +627,6 @@ Kurallar:
 - Gereksiz ayrıntıya girme; anlaşılır ve kısa yanıt üret.
         """.strip()
 
-        # Azure OpenAI Chat Completions (deployment name ile çağrılır)
         completion = aoai_client.chat.completions.create(
             model=AZURE_DEPLOYMENT_NAME,
             messages=[
@@ -621,20 +641,6 @@ Kurallar:
 
     except Exception as e:
         return jsonify({"ok": False, "error": f"Hata: {str(e)}", "trace": traceback.format_exc()}), 500
-
-
-@app.route("/dataset", methods=["GET"])
-def dataset():
-    """
-    dataset.json içeriğini döndürür (frontend kolayca çekebilmek için).
-    Zaten static_folder='.' olduğu için /dataset.json da servis edilir;
-    bu endpoint sadece JSON doğrulaması ve düzgün hata için var.
-    """
-    try:
-        data = load_dataset_from_file()
-        return jsonify({"ok": True, "dataset": data})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/health")
@@ -662,17 +668,15 @@ def solve():
         if solver is None:
             return jsonify({"ok": False, "error": "Uygun MILP çözücüsü bulunamadı."}), 400
 
-        # --- ÇÖZ (MAX_SOLVE_SECONDS içinde) ---
-        # Not: load_solutions=True -> bulunan inkümbent model üzerine yüklenir.
+        # --- ÇÖZ ---
         if is_appsi:
-            results = solver.solve(model)  # APPsi zaten time_limit aldı
+            results = solver.solve(model)
             term = getattr(results, "termination_condition", None)
         else:
             try:
                 results = solver.solve(model, tee=False, load_solutions=True)
             except TypeError:
                 results = solver.solve(model, load_solutions=True)
-            # TerminationCondition güvenli okuma
             term = None
             if hasattr(results, "solver") and hasattr(results.solver, "termination_condition"):
                 term = results.solver.termination_condition
@@ -701,7 +705,6 @@ def solve():
             out = extract_results(model, meta)
             return jsonify({"ok": True, "solver": solver_name, "result": out, "diagnostics": diag})
 
-        # inkümbent yoksa
         return jsonify({
             "ok": False,
             "error": f"{MAX_SOLVE_SECONDS} sn içinde uygulanabilir çözüm bulunamadı. Durum: {term}",
@@ -715,7 +718,3 @@ def solve():
 if __name__ == "__main__":
     # Lokal test için:
     app.run(host="0.0.0.0", port=5000, debug=True)
-
-
-
-
