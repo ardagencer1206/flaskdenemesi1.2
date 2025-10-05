@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="tr" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>Giriş Yap • Lojistik Optimizasyonu</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    :root{
+      --glass-bg: color-mix(in oklab, var(--bs-body-bg) 40%, transparent);
+      --glass-bd: color-mix(in oklab, var(--bs-body-color) 15%, transparent);
+      --ring: 0 0 0 .25rem color-mix(in oklab, var(--bs-primary) 35%, transparent);
+    }
+    html,body{height:100%}
+    body{
+      margin:0; display:grid; place-items:center; overflow:hidden; color:var(--bs-body-color);
+      background:
+        radial-gradient(1200px 800px at 10% -10%, rgba(13,110,253,.18), transparent 45%),
+        radial-gradient(900px 900px at 120% 20%, rgba(111,66,193,.20), transparent 40%),
+        linear-gradient(180deg, color-mix(in oklab, var(--bs-body-bg) 90%, #000 10%), var(--bs-body-bg));
+    }
+    /* Animated blobs */
+    .blob{
+      position:fixed; filter: blur(60px); opacity:.55; z-index:0; pointer-events:none;
+      background: radial-gradient(closest-side, rgba(13,110,253,.55), rgba(13,110,253,0));
+      width:560px; height:560px; top:-140px; left:-120px; border-radius:50%;
+      animation: float1 18s ease-in-out infinite;
+    }
+    .blob.b2{
+      background: radial-gradient(closest-side, rgba(111,66,193,.55), rgba(111,66,193,0));
+      width:500px; height:500px; bottom:-120px; right:-100px; top:auto; left:auto;
+      animation: float2 22s ease-in-out infinite;
+    }
+    @keyframes float1{ 0%,100%{transform:translate(0,0)} 50%{transform:translate(40px,30px)}}
+    @keyframes float2{ 0%,100%{transform:translate(0,0)} 50%{transform:translate(-30px,-40px)}}
+
+    /* Glass card */
+    .glass{
+      position:relative; z-index:1;
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-bd);
+      backdrop-filter: saturate(1.25) blur(14px);
+      -webkit-backdrop-filter: saturate(1.25) blur(14px);
+      border-radius: 24px;
+      box-shadow:
+        0 10px 30px rgba(0,0,0,.20),
+        inset 0 1px 0 rgba(255,255,255,.12);
+    }
+    .brand{
+      display:flex; align-items:center; gap:.6rem; justify-content:center;
+    }
+    .brand .logo{
+      width:44px; height:44px; display:grid; place-items:center;
+      border-radius:14px; background:linear-gradient(135deg, rgba(13,110,253,.35), rgba(111,66,193,.35));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.25);
+    }
+    .btn-glass{
+      border:1px solid var(--glass-bd);
+      background: linear-gradient(135deg, rgba(13,110,253,.16), rgba(111,66,193,.14));
+      color:var(--bs-body-color);
+      box-shadow: 0 8px 22px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.15);
+      transition: transform .15s ease, box-shadow .15s ease, background .2s ease;
+    }
+    .btn-glass:hover{
+      transform: translateY(-1px);
+      box-shadow: 0 16px 28px rgba(13,110,253,.25);
+      background: linear-gradient(135deg, rgba(13,110,253,.24), rgba(111,66,193,.20));
+    }
+    .form-control, .form-select{
+      background: color-mix(in oklab, var(--bs-body-bg) 70%, transparent);
+      border:1px solid var(--glass-bd);
+      color:var(--bs-body-color);
+    }
+    .form-control:focus{
+      border-color: color-mix(in oklab, var(--bs-primary) 55%, var(--glass-bd));
+      box-shadow: var(--ring);
+    }
+    .icon-input{
+      position:relative;
+    }
+    .icon-input .bi{
+      position:absolute; left:.75rem; top:50%; transform:translateY(-50%); opacity:.6;
+    }
+    .icon-input input{ padding-left:2.2rem; }
+    .toggle-eye{
+      position:absolute; right:.65rem; top:50%; transform:translateY(-50%); cursor:pointer; opacity:.7;
+    }
+    .divider{
+      display:flex; align-items:center; gap:.75rem; color:var(--bs-secondary-color);
+    }
+    .divider::before, .divider::after{
+      content:""; height:1px; flex:1; background: var(--glass-bd);
+    }
+    .link-muted{ color: var(--bs-secondary-color); text-decoration:none; }
+    .link-muted:hover{ color: var(--bs-body-color); text-decoration:underline; }
+    .top-actions{
+      position:fixed; top:18px; right:18px; z-index:2; display:flex; gap:.5rem;
+    }
+    .btn-circle{
+      width:40px; height:40px; border-radius:50%; display:grid; place-items:center;
+      border:1px solid var(--glass-bd); background:var(--glass-bg);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    }
+    .alert-glass{
+      border:1px solid color-mix(in oklab, var(--bs-danger) 35%, transparent);
+      background: color-mix(in oklab, var(--bs-danger-bg-subtle) 35%, transparent);
+    }
+    .success-glass{
+      border:1px solid color-mix(in oklab, var(--bs-success) 35%, transparent);
+      background: color-mix(in oklab, var(--bs-success-bg-subtle) 35%, transparent);
+    }
+    @media (max-width: 480px){
+      .p-card{ padding:1.25rem !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="blob"></div>
+  <div class="blob b2"></div>
+
+  <!-- Top-right actions -->
+  <div class="top-actions">
+    <button id="themeToggle" class="btn btn-circle" aria-label="Tema">
+      <i class="bi bi-moon-stars"></i>
+    </button>
+    <a href="register.html" class="btn btn-circle" aria-label="Kayıt Ol">
+      <i class="bi bi-person-plus"></i>
+    </a>
+  </div>
+
+  <!-- Card -->
+  <div class="container" style="z-index:1">
+    <div class="row justify-content-center">
+      <div class="col-12 col-md-7 col-lg-5 col-xxl-4">
+        <div class="glass p-card p-4 p-md-5">
+          <div class="brand mb-3">
+            <div class="logo"><i class="bi bi-truck text-white fs-5"></i></div>
+            <div>
+              <div class="fw-semibold">Lojistik Optimizasyonu</div>
+              <div class="small text-secondary">Hesabınıza giriş yapın</div>
+            </div>
+          </div>
+
+          <div id="alert" class="alert alert-glass d-none small"></div>
+          <div id="ok" class="alert success-glass d-none small"></div>
+
+          <form id="loginForm" novalidate>
+            <div class="mb-3 icon-input">
+  
+              <label class="form-label small text-secondary">E-posta</label>
+              <input id="email" type="email" class="form-control form-control-lg" placeholder="ornek@domain.com" autocomplete="username" required>
+              <div class="invalid-feedback">Lütfen geçerli bir e-posta girin.</div>
+            </div>
+
+            <div class="mb-2 icon-input">
+          
+              <label class="form-label small text-secondary">Şifre</label>
+              <input id="password" type="password" class="form-control form-control-lg" placeholder="••••••••" autocomplete="current-password" minlength="8" required>
+              <i id="togglePwd" class="bi bi-eye toggle-eye" title="Göster/Gizle"></i>
+              <div class="invalid-feedback">En az 8 karakter olmalı.</div>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="remember">
+                <label class="form-check-label small" for="remember">Beni hatırla</label>
+              </div>
+              <a href="#" class="link-muted small">Şifremi unuttum</a>
+            </div>
+
+            <button id="loginBtn" class="btn btn-glass btn-lg w-100">
+              <i class="bi bi-box-arrow-in-right me-1"></i> Giriş Yap
+            </button>
+          </form>
+
+          <div class="my-3 divider small">veya</div>
+
+          <div class="d-grid gap-2">
+            <button class="btn btn-outline-light border-0" style="background:var(--glass-bg); border:1px solid var(--glass-bd)">
+              <i class="bi bi-google me-2"></i>Google ile devam et
+            </button>
+            <button class="btn btn-outline-light border-0" style="background:var(--glass-bg); border:1px solid var(--glass-bd)">
+              <i class="bi bi-github me-2"></i>GitHub ile devam et
+            </button>
+          </div>
+
+          <div class="text-center mt-3 small">
+            Hesabın yok mu? <a href="register.html">Hemen kaydol</a>
+          </div>
+        </div>
+
+        <p class="text-center text-secondary small mt-3">© TOBB ETÜ Endüstri</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const form = $("loginForm");
+    const email = $("email");
+    const password = $("password");
+    const alertBox = $("alert");
+    const okBox = $("ok");
+
+    function showErr(msg){
+      alertBox.textContent = msg;
+      alertBox.classList.remove("d-none");
+      okBox.classList.add("d-none");
+    }
+    function showOk(msg){
+      okBox.textContent = msg;
+      okBox.classList.remove("d-none");
+      alertBox.classList.add("d-none");
+    }
+
+    // Theme toggle
+    (function(){
+      const btn = $("themeToggle");
+      const root = document.documentElement;
+      const saved = (()=>{ try{ return localStorage.getItem("ui-theme"); }catch(_){}})();
+      if(saved) root.setAttribute("data-bs-theme", saved);
+      btn?.addEventListener("click", ()=>{
+        const cur = root.getAttribute("data-bs-theme") || "dark";
+        const nxt = cur === "dark" ? "light" : "dark";
+        root.setAttribute("data-bs-theme", nxt);
+        try{ localStorage.setItem("ui-theme", nxt); }catch(_){}
+      });
+    })();
+
+    // Show/Hide password
+    $("togglePwd")?.addEventListener("click", ()=>{
+      const type = password.getAttribute("type") === "password" ? "text" : "password";
+      password.setAttribute("type", type);
+      $("togglePwd").classList.toggle("bi-eye");
+      $("togglePwd").classList.toggle("bi-eye-slash");
+    });
+
+    // Submit
+    form?.addEventListener("submit", async (e)=>{
+      e.preventDefault();
+      form.classList.add("was-validated");
+      if(!form.checkValidity()) return;
+
+      try{
+        const res = await fetch("/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: email.value.trim(),
+            password: password.value,
+            remember: $("remember").checked
+          })
+        });
+        const data = await res.json().catch(()=>({}));
+        if(!res.ok || data.ok === false) throw new Error(data.error || `Giriş başarısız (HTTP ${res.status})`);
+        showOk("Giriş başarılı, yönlendiriliyor…");
+        setTimeout(()=> location.href = "index.html", 650);
+      }catch(err){ showErr(err.message); }
+    });
+
+    $("loginBtn")?.addEventListener("click", (e)=>{ e.preventDefault(); form.requestSubmit(); });
+    [email, password].forEach(el=> el?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") form.requestSubmit(); }));
+  </script>
+</body>
+</html>
