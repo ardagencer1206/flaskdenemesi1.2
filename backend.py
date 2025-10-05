@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import json
 from openai import AzureOpenAI
 import traceback
 from typing import Dict, Any, List, Tuple
@@ -10,8 +11,21 @@ from pyomo.environ import (
     Constraint, Any as PyAny, value, SolverFactory
 )
 from pyomo.opt import TerminationCondition
+from pathlib import Path
+DATASET_PATH = Path(os.environ.get("DATASET_PATH", str(Path(__file__).parent / "dataset.json")))
 
+
+
+
+
+
+MAX_SOLVE_SECONDS = 26  # işlemciye verdiğimiz süre
 app = Flask(__name__, static_url_path="", static_folder=".")
+
+# =======================
+# Dataset yolu (env ile özelleştirilebilir)
+# =======================
+
 
 # ---------------- Azure OpenAI Ayarları ----------------
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "d0167637046c4443badc4920cc612abb")
@@ -43,18 +57,43 @@ def safe_float(x, default=0.0):
         return default
 
 
+def load_dataset_from_file() -> Dict[str, Any]:
+    """
+    dataset.json dosyasını okur ve dict döner.
+    DATASET_PATH env ile özelleştirilebilir.
+    """
+    try:
+        with open(DATASET_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # minimum alan kontrolü
+        required = [
+            "cities", "main_depot", "periods", "vehicle_types",
+            "vehicle_count", "distances", "packages", "minutil_penalty"
+        ]
+        for k in required:
+            if k not in data:
+                raise KeyError(f"dataset.json alan eksik: {k}")
+        return data
+    except FileNotFoundError:
+        raise FileNotFoundError(f"dataset.json bulunamadı: {DATASET_PATH}")
+    except Exception as e:
+        raise RuntimeError(f"dataset.json okunamadı: {e}")
+
+
 def pick_solver():
     """
-    Önce Pyomo APPsi-HiGHS (highspy) denenir (apt gerekmez).
-    Ardından klasik SolverFactory isimleri (highs/cbc/glpk/cplex).
+    Önce Pyomo APPsi-HiGHS (highspy) denenir.
+    Ardından klasik arayüzler (highs/cbc/glpk/cplex).
     Geriye (solver_adı, solver_nesnesi, is_appsi_bool) döner.
+    Tümünde MAX_SOLVE_SECONDS zaman limiti uygulanır.
     """
     # 1) APPsi-HiGHS (Python wrapper)
     try:
         from pyomo.contrib.appsi.solvers.highs import Highs as AppsiHighs
         s = AppsiHighs()
         try:
-            s.config.time_limit = 300
+            s.config.time_limit = MAX_SOLVE_SECONDS
+            # s.config.mip_rel_gap = 0.05  # istersen ayrıca gap hedefi
         except Exception:
             pass
         return "appsi_highs", s, True
@@ -66,18 +105,20 @@ def pick_solver():
         try:
             s = SolverFactory(cand)
             if s is not None and s.available():
-                # makul zaman sınırı (destekleyenlerde)
-                for key in ("timelimit", "time_limit"):
-                    try:
-                        s.options[key] = 300
-                    except Exception:
-                        pass
-                if cand == "cplex":
-                    try:
+                # Zaman limiti ve ilgili opsiyonlar (çözücüye göre anahtar isimleri farklı)
+                try:
+                    if cand == "highs":
+                        s.options["time_limit"] = MAX_SOLVE_SECONDS             # float saniye
+                    elif cand == "cbc":
+                        s.options["seconds"] = int(MAX_SOLVE_SECONDS)           # int saniye
+                    elif cand == "glpk":
+                        s.options["tmlim"] = int(MAX_SOLVE_SECONDS)             # int saniye
+                    elif cand == "cplex":
+                        s.options["timelimit"] = MAX_SOLVE_SECONDS              # float saniye
                         s.options["mipgap"] = 0.05
                         s.options["threads"] = 2
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
                 return cand, s, False
         except Exception:
             continue
@@ -460,11 +501,11 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
 
         segs = []
         for t in periods:
-            for v in model.Vehicles:
+            for vv in model.Vehicles:
                 for i in cities:
                     for j in cities:
-                        if i != j and value(model.y[p, v, i, j, t]) > 0.5:
-                            segs.append({"t": t, "from": i, "to": j, "vehicle": v})
+                        if i != j and value(model.y[p, vv, i, j, t]) > 0.5:
+                            segs.append({"t": t, "from": i, "to": j, "vehicle": vv})
 
         summary = {
             "id": p,
@@ -493,6 +534,49 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
 def root():
     return send_from_directory(".", "index.html")
 
+@app.route("/dataset", methods=["GET", "PUT", "POST"])
+def dataset_endpoint():
+    """
+    GET  -> dataset.json'u oku ve döndür
+    PUT  -> gelen JSON'u doğrula ve dataset.json'a yaz
+    POST -> bazı ortamlarda PUT engelli olabilir; POST'u PUT gibi kullan
+    """
+    try:
+        if request.method == "GET":
+            if not DATASET_PATH.exists():
+                return jsonify({"ok": False, "error": "dataset.json bulunamadı"}), 404
+            with open(DATASET_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return jsonify({"ok": True, "dataset": data})
+
+        # PUT veya POST -> kaydet
+        try:
+            payload = request.get_json(force=True)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"Geçersiz JSON: {e}"}), 400
+
+        # Basit şema kontrolü
+        required_keys = [
+            "cities","main_depot","periods",
+            "vehicle_types","vehicle_count",
+            "distances","packages","minutil_penalty"
+        ]
+        missing = [k for k in required_keys if k not in payload]
+        if missing:
+            return jsonify({"ok": False, "error": f"Eksik alanlar: {', '.join(missing)}"}), 400
+
+        # Dosyaya yaz
+        tmp_path = DATASET_PATH.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        tmp_path.replace(DATASET_PATH)  # atomic replace
+
+        return jsonify({"ok": True, "message": "dataset.json güncellendi"})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Hata: {e}"}), 500
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     """
@@ -511,7 +595,7 @@ def chat():
         sys_prompt = f"""
 Sen bir lojistik optimizasyon asistanısın. Kullanıcıdan gelen VRP/çok duruşlu taşımacılık
 parametrelerini (şehirler, dönemler, ana depo, araç tip/sayıları, mesafeler, paketler,
-min. doluluk cezası) kullanarak kısa ve net cevap ver.
+min. doluluk cezası) kullanarak kısa ve net cevap ver. Her şehir bir depodur ama bir tane ana depo vardır. Alakasız bir şey sorulursa cevap verme. Senin Adın VRP Assist 2.0
 
 Model için kullanılan JSON parametreleri:
 {model_context}
@@ -539,60 +623,90 @@ Kurallar:
         return jsonify({"ok": False, "error": f"Hata: {str(e)}", "trace": traceback.format_exc()}), 500
 
 
+@app.route("/dataset", methods=["GET"])
+def dataset():
+    """
+    dataset.json içeriğini döndürür (frontend kolayca çekebilmek için).
+    Zaten static_folder='.' olduğu için /dataset.json da servis edilir;
+    bu endpoint sadece JSON doğrulaması ve düzgün hata için var.
+    """
+    try:
+        data = load_dataset_from_file()
+        return jsonify({"ok": True, "dataset": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
+
 
 @app.errorhandler(500)
 def handle_500(e):
     return jsonify({"ok": False, "error": "Internal Server Error"}), 500
 
+
+# ==== /solve ====
 @app.route("/solve", methods=["POST"])
 def solve():
     try:
-        data = request.get_json(force=True)
+        # Önce gelen payload'ı dene; yoksa dataset.json'u yükle
+        data = request.get_json(silent=True) or {}
+        if not data:
+            data = load_dataset_from_file()
+
         model, meta = build_model(data)
 
         solver_name, solver, is_appsi = pick_solver()
         if solver is None:
             return jsonify({"ok": False, "error": "Uygun MILP çözücüsü bulunamadı."}), 400
 
-        # --- ÇÖZ ---
-        # Appsi-HiGHS 'tee' kabul etmez; klasik arayüzde varsa kapatılmış tee ile deneriz.
+        # --- ÇÖZ (MAX_SOLVE_SECONDS içinde) ---
+        # Not: load_solutions=True -> bulunan inkümbent model üzerine yüklenir.
         if is_appsi:
-            results = solver.solve(model)
+            results = solver.solve(model)  # APPsi zaten time_limit aldı
             term = getattr(results, "termination_condition", None)
         else:
             try:
-                results = solver.solve(model, tee=False)
+                results = solver.solve(model, tee=False, load_solutions=True)
             except TypeError:
-                results = solver.solve(model)
-            # TerminationCondition güvenli okuma (bazı arayüzler results.solver.* verir)
+                results = solver.solve(model, load_solutions=True)
+            # TerminationCondition güvenli okuma
             term = None
             if hasattr(results, "solver") and hasattr(results.solver, "termination_condition"):
                 term = results.solver.termination_condition
             else:
                 term = getattr(results, "termination_condition", None)
 
-        # --- Başarı kontrolü ---
-        # Pyomo TerminationCondition enumu ile karşılaştır; metin fallback'i de ekle.
-        success_terms = {
-            getattr(TerminationCondition, "optimal", None),
-            getattr(TerminationCondition, "feasible", None),
-            getattr(TerminationCondition, "locallyOptimal", None),
+        # --- İnkümbent var mı? ---
+        def has_incumbent(m):
+            try:
+                for _, v in m.x.items():
+                    if v.value is not None:
+                        return True
+            except Exception:
+                pass
+            return False
+
+        diag = {
+            "termination": str(term),
+            "solver": solver_name,
+            "wallclock_time": getattr(getattr(results, "solver", None), "wallclock_time", None),
+            "gap": getattr(getattr(results, "solver", None), "gap", None),
+            "status": getattr(getattr(results, "solver", None), "status", None),
         }
-        term_str = (str(term) or "").lower()  # örn: "terminationcondition.optimal"
 
-        is_success = (term in success_terms) \
-                     or term_str.endswith("optimal") \
-                     or term_str.endswith("feasible")
-
-        if is_success:
+        if has_incumbent(model):
             out = extract_results(model, meta)
-            return jsonify({"ok": True, "solver": solver_name, "result": out})
+            return jsonify({"ok": True, "solver": solver_name, "result": out, "diagnostics": diag})
 
-        # başarısız durum
-        return jsonify({"ok": False, "error": f"Çözüm bulunamadı. Durum: {term}"}), 200
+        # inkümbent yoksa
+        return jsonify({
+            "ok": False,
+            "error": f"{MAX_SOLVE_SECONDS} sn içinde uygulanabilir çözüm bulunamadı. Durum: {term}",
+            "diagnostics": diag
+        }), 200
 
     except Exception as e:
         return jsonify({"ok": False, "error": f"Hata: {str(e)}", "trace": traceback.format_exc()}), 500
@@ -601,11 +715,6 @@ def solve():
 if __name__ == "__main__":
     # Lokal test için:
     app.run(host="0.0.0.0", port=5000, debug=True)
-
-
-
-
-
 
 
 
