@@ -1,5 +1,6 @@
   <!-- DEMODUR, AKTİF DEĞİLDİR -->
-  <!doctype html>
+
+<!doctype html>
 <html lang="tr" data-bs-theme="dark">
 <head>
   <meta charset="utf-8" />
@@ -73,15 +74,9 @@
       border-color: color-mix(in oklab, var(--bs-primary) 55%, var(--glass-bd));
       box-shadow: var(--ring);
     }
-    .icon-input{ position:relative; }
-    .icon-input .bi{ position:absolute; left:.75rem; top:50%; transform:translateY(-50%); opacity:.6; }
-    .icon-input input{ padding-left:2.2rem; }
-    .toggle-eye{ position:absolute; right:.65rem; top:50%; transform:translateY(-50%); cursor:pointer; opacity:.7; }
-    .divider{ display:flex; align-items:center; gap:.75rem; color:var(--bs-secondary-color); }
-    .divider::before, .divider::after{ content:""; height:1px; flex:1; background: var(--glass-bd); }
-    .link-muted{ color: var(--bs-secondary-color); text-decoration:none; }
-    .link-muted:hover{ color: var(--bs-body-color); text-decoration:underline; }
-    .top-actions{ position:fixed; top:18px; right:18px; z-index:2; display:flex; gap:.5rem; }
+    .top-actions{
+      position:fixed; top:18px; right:18px; z-index:2; display:flex; gap:.5rem;
+    }
     .btn-circle{
       width:40px; height:40px; border-radius:50%; display:grid; place-items:center;
       border:1px solid var(--glass-bd); background:var(--glass-bg);
@@ -102,12 +97,11 @@
   <div class="blob"></div>
   <div class="blob b2"></div>
 
-  <!-- Top-right actions -->
   <div class="top-actions">
     <button id="themeToggle" class="btn btn-circle" aria-label="Tema">
       <i class="bi bi-moon-stars"></i>
     </button>
-    <a href="login.html" class="btn btn-circle" aria-label="Giriş Yap">
+    <a href="login.html" class="btn btn-circle" aria-label="Giriş">
       <i class="bi bi-box-arrow-in-right"></i>
     </a>
   </div>
@@ -128,60 +122,42 @@
           <div id="ok" class="alert success-glass d-none small"></div>
 
           <form id="regForm" novalidate>
-            <div class="mb-3 icon-input">
-              <i class="bi bi-person"></i>
+            <div class="mb-3">
               <label class="form-label small text-secondary">Ad Soyad</label>
-              <input id="name" type="text" class="form-control form-control-lg" placeholder="Adınız Soyadınız" autocomplete="name" required>
-              <div class="invalid-feedback">Lütfen ad soyad girin.</div>
+              <input id="name" type="text" class="form-control form-control-lg" placeholder="Adınız Soyadınız" minlength="2" required>
+              <div class="invalid-feedback">Lütfen adınızı girin (min 2 karakter).</div>
             </div>
 
-            <div class="mb-3 icon-input">
-              <i class="bi bi-envelope"></i>
+            <div class="mb-3">
               <label class="form-label small text-secondary">E-posta</label>
               <input id="email" type="email" class="form-control form-control-lg" placeholder="ornek@domain.com" autocomplete="username" required>
               <div class="invalid-feedback">Geçerli bir e-posta girin.</div>
             </div>
 
-            <div class="mb-3 icon-input">
-              <i class="bi bi-shield-lock"></i>
+            <div class="mb-3">
               <label class="form-label small text-secondary">Şifre</label>
-              <input id="password" type="password" class="form-control form-control-lg" placeholder="En az 8 karakter" autocomplete="new-password" minlength="8" required>
-              <i id="togglePwd" class="bi bi-eye toggle-eye" title="Göster/Gizle"></i>
-              <div class="invalid-feedback">Şifre en az 8 karakter olmalı, harf ve sayı içermesi önerilir.</div>
-              <div class="form-text small" id="meterText"></div>
+              <input id="password" type="password" class="form-control form-control-lg" placeholder="En az 8 karakter" minlength="8" required>
+              <div class="invalid-feedback">Şifreniz en az 8 karakter olmalı.</div>
             </div>
 
-            <div class="mb-3 icon-input">
-              <i class="bi bi-shield-check"></i>
+            <div class="mb-3">
               <label class="form-label small text-secondary">Şifre (Tekrar)</label>
-              <input id="password2" type="password" class="form-control form-control-lg" placeholder="Şifreyi tekrar girin" autocomplete="new-password" required>
-              <i id="togglePwd2" class="bi bi-eye toggle-eye" title="Göster/Gizle"></i>
+              <input id="password2" type="password" class="form-control form-control-lg" placeholder="Şifrenizi tekrar girin" minlength="8" required>
               <div class="invalid-feedback">Şifreler eşleşmiyor.</div>
             </div>
 
             <div class="form-check mb-3">
               <input class="form-check-input" type="checkbox" id="terms" required>
               <label class="form-check-label small" for="terms">
-                <a href="#" class="link-muted">Kullanım Koşulları</a> ve <a href="#" class="link-muted">Gizlilik</a>’i kabul ediyorum.
+                <a href="#" class="text-decoration-underline">Kullanım koşullarını</a> kabul ediyorum.
               </label>
-              <div class="invalid-feedback">Devam etmek için onay gerekli.</div>
+              <div class="invalid-feedback">Devam etmek için koşulları kabul edin.</div>
             </div>
 
             <button id="regBtn" class="btn btn-glass btn-lg w-100">
               <i class="bi bi-person-plus me-1"></i> Kayıt Ol
             </button>
           </form>
-
-          <div class="my-3 divider small">veya</div>
-
-          <div class="d-grid gap-2">
-            <button class="btn btn-outline-light border-0" style="background:var(--glass-bg); border:1px solid var(--glass-bd)">
-              <i class="bi bi-google me-2"></i>Google ile devam et
-            </button>
-            <button class="btn btn-outline-light border-0" style="background:var(--glass-bg); border:1px solid var(--glass-bd)">
-              <i class="bi bi-github me-2"></i>GitHub ile devam et
-            </button>
-          </div>
 
           <div class="text-center mt-3 small">
             Zaten hesabın var mı? <a href="login.html">Giriş yap</a>
@@ -198,12 +174,11 @@
     const form = $("regForm");
     const nameEl = $("name");
     const emailEl = $("email");
-    const pwdEl = $("password");
-    const pwd2El = $("password2");
+    const pwd = $("password");
+    const pwd2 = $("password2");
     const terms = $("terms");
     const alertBox = $("alert");
     const okBox = $("ok");
-    const meterText = $("meterText");
 
     function showErr(msg){
       alertBox.textContent = msg;
@@ -230,50 +205,20 @@
       });
     })();
 
-    // Show/Hide passwords
-    $("togglePwd")?.addEventListener("click", ()=>{
-      const type = pwdEl.getAttribute("type") === "password" ? "text" : "password";
-      pwdEl.setAttribute("type", type);
-      $("togglePwd").classList.toggle("bi-eye");
-      $("togglePwd").classList.toggle("bi-eye-slash");
-    });
-    $("togglePwd2")?.addEventListener("click", ()=>{
-      const type = pwd2El.getAttribute("type") === "password" ? "text" : "password";
-      pwd2El.setAttribute("type", type);
-      $("togglePwd2").classList.toggle("bi-eye");
-      $("togglePwd2").classList.toggle("bi-eye-slash");
-    });
-
-    // Simple strength hint
-    function strengthHint(v){
-      let score = 0;
-      if(v.length >= 8) score++;
-      if(/[A-ZĞÜŞİÖÇ]/.test(v)) score++;
-      if(/[a-zğıüşiöç]/.test(v)) score++;
-      if(/\d/.test(v)) score++;
-      if(/[^\w\s]/.test(v)) score++;
-      const labels = ["Zayıf","Zayıf+","Orta","İyi","Güçlü"];
-      return labels[Math.max(0, Math.min(labels.length-1, score-1))];
-    }
-    pwdEl.addEventListener("input", ()=>{
-      meterText.textContent = "Şifre gücü: " + strengthHint(pwdEl.value || "");
-    });
-
-    function validateMatch(){
-      if(pwd2El.value && pwdEl.value !== pwd2El.value){
-        pwd2El.setCustomValidity("Mismatch");
+    function validatePasswords(){
+      if(pwd.value && pwd2.value && pwd.value !== pwd2.value){
+        pwd2.setCustomValidity("Mismatch");
       }else{
-        pwd2El.setCustomValidity("");
+        pwd2.setCustomValidity("");
       }
     }
-    pwdEl.addEventListener("input", validateMatch);
-    pwd2El.addEventListener("input", validateMatch);
+    pwd.addEventListener("input", validatePasswords);
+    pwd2.addEventListener("input", validatePasswords);
 
-    // Submit
     form?.addEventListener("submit", async (e)=>{
       e.preventDefault();
+      validatePasswords();
       form.classList.add("was-validated");
-      validateMatch();
       if(!form.checkValidity()) return;
 
       try{
@@ -283,19 +228,19 @@
           body: JSON.stringify({
             name: nameEl.value.trim(),
             email: emailEl.value.trim(),
-            password: pwdEl.value,
+            password: pwd.value,
             accept_terms: terms.checked
           })
         });
         const data = await res.json().catch(()=>({}));
         if(!res.ok || data.ok === false) throw new Error(data.error || `Kayıt başarısız (HTTP ${res.status})`);
         showOk("Kayıt başarılı! Giriş sayfasına yönlendiriliyorsunuz…");
-        setTimeout(()=> location.href = "login.html", 800);
+        setTimeout(()=> location.href = "login.html", 900);
       }catch(err){ showErr(err.message); }
     });
 
     $("regBtn")?.addEventListener("click", (e)=>{ e.preventDefault(); form.requestSubmit(); });
-    [nameEl, emailEl, pwdEl, pwd2El].forEach(el=> el?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") form.requestSubmit(); }));
+    [nameEl, emailEl, pwd, pwd2].forEach(el=> el?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") form.requestSubmit(); }));
   </script>
 </body>
 </html>
