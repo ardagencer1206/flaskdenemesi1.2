@@ -1,23 +1,25 @@
+# log_register.py
 from flask import Flask, request, jsonify, send_from_directory, session, redirect, url_for
 import sqlite3
 from pathlib import Path
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 
-app = Flask(__name__)
+BASE_DIR = Path(__file__).parent
+DB_PATH = BASE_DIR / "users.db"
+
+app = Flask(__name__, static_url_path="", static_folder=".")  # login.html / register.html / index.html aynı klasörde
 app.secret_key = os.environ.get("SECRET_KEY", "supersecret")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
-DB_PATH = Path(__file__).parent / "users.db"
-
-
-# ------------------------
-# DB bağlantısı ve tablo
-# ------------------------
+# ---------------- DB ----------------
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 def init_db():
     conn = get_db()
@@ -34,20 +36,24 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 init_db()
 
+# ------------- Pages ---------------
+@app.get("/login")
+def login_page():
+    return send_from_directory(".", "login.html")
 
-# ------------------------
-# Register
-# ------------------------
-@app.route("/register", methods=["GET", "POST"])
+@app.get("/register")
+def register_page():
+    return send_from_directory(".", "register.html")
+
+# ------------- API -----------------
+@app.route("/register", methods=["POST", "OPTIONS"])
 def register():
-    if request.method == "GET":
-        # register.html sayfasını döndür
-        return send_from_directory(".", "register.html")
+    # CORS preflight veya bazı barındırma ortamlarında otomatik preflight -> 200 dön
+    if request.method == "OPTIONS":
+        return ("", 204)
 
-    # POST -> kullanıcı kaydı
     data = request.get_json(silent=True) or request.form
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
@@ -71,14 +77,10 @@ def register():
 
     return jsonify({"ok": True, "message": "Kayıt başarılı"})
 
-
-# ------------------------
-# Login
-# ------------------------
-@app.route("/login", methods=["GET", "POST"])
+@app.route("/login", methods=["POST", "OPTIONS"])
 def login():
-    if request.method == "GET":
-        return send_from_directory(".", "login.html")
+    if request.method == "OPTIONS":
+        return ("", 204)
 
     data = request.get_json(silent=True) or request.form
     email = (data.get("email") or "").strip().lower()
@@ -93,28 +95,30 @@ def login():
 
     session["user_id"] = user["id"]
     session["email"] = user["email"]
-
     return jsonify({"ok": True, "message": "Giriş başarılı"})
 
-
-# ------------------------
-# Logout
-# ------------------------
-@app.route("/logout")
+@app.get("/logout")
 def logout():
     session.clear()
-    return redirect(url_for("login"))
+    return redirect(url_for("login_page"))
 
-
-# ------------------------
-# Ana sayfa koruması
-# ------------------------
-@app.route("/")
+# ------------- Protected -----------
+@app.get("/")
 def index():
     if "user_id" not in session:
-        return redirect(url_for("login"))
+        return redirect(url_for("login_page"))
     return send_from_directory(".", "index.html")
 
+# ------------- Utils ---------------
+@app.get("/health")
+def health():
+    return jsonify({"ok": True})
+
+@app.get("/whoami")
+def whoami():
+    if "user_id" not in session:
+        return jsonify({"ok": False, "auth": False})
+    return jsonify({"ok": True, "auth": True, "email": session.get("email")})
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(host="0.0.0.0", port=5001, debug=True)
