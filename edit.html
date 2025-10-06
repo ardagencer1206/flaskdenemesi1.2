@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="tr" data-bs-theme="light">
 <head>
@@ -70,7 +69,7 @@
             <div class="mb-3">
               <label for="cities" class="form-label">Şehirler (JSON dizi)</label>
               <input id="cities" class="form-control" placeholder='["İstanbul","Ankara","İzmir"]' />
-              <div class="form-text">Araç başlangıç konumları bu listedeki şehirlerden seçilir.</div>
+              <div class="form-text">Araç başlangıç konumları ve paket şehirleri bu listedeki şehirlerden seçilir.</div>
             </div>
 
             <div class="row g-3 mb-3">
@@ -113,13 +112,39 @@
               <textarea id="distances" class="form-control" rows="5" placeholder='[["İstanbul","Ankara",450], ...]'></textarea>
             </div>
 
+            <!-- Paketler: Kullanıcı Dostu Tablo -->
             <div class="mb-3">
-              <label for="packages" class="form-label">Paketler (liste)</label>
-              <textarea id="packages" class="form-control" rows="9" placeholder='[
-  { "id":"P1", "baslangic":"Ankara",    "hedef":"İzmir",    "agirlik":120, "ready_hour":0, "deadline_hour":36, "ceza":120 },
-  { "id":"P2", "baslangic":"İzmir",     "hedef":"Ankara",   "agirlik":90,  "ready_hour":0, "deadline_hour":36, "ceza":120 }
-]'></textarea>
-              <div class="form-text"><code>ready_hour</code> ve <code>deadline_hour</code> saat cinsindendir. Gecikme serbesttir ancak ceza uygulanır.</div>
+              <div class="d-flex align-items-center justify-content-between">
+                <label class="form-label mb-0">Paketler</label>
+                <div class="d-flex gap-2">
+                  <button id="addPkgBtn" type="button" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-plus-circle me-1"></i>Ekle
+                  </button>
+                  <button id="clearPkgsBtn" type="button" class="btn btn-sm btn-outline-danger">
+                    <i class="bi bi-trash me-1"></i>Tümünü Temizle
+                  </button>
+                </div>
+              </div>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm table-hover align-middle mb-0" id="pkgTable">
+                  <thead class="table-light">
+                    <tr>
+                      <th style="min-width:90px">ID</th>
+                      <th>Başlangıç</th>
+                      <th>Hedef</th>
+                      <th style="min-width:110px">Ağırlık (kg)</th>
+                      <th style="min-width:120px">Hazır (saat)</th>
+                      <th style="min-width:120px">Termin (saat)</th>
+                      <th style="min-width:110px">Ceza (TL/saat)</th>
+                      <th style="width:1%"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="pkgTbody">
+                    <!-- Satırlar JS ile doldurulur -->
+                  </tbody>
+                </table>
+              </div>
+              <div class="form-text">Şehirler açılır menüden seçilir; diğer alanlar sayı olarak girilir.</div>
             </div>
 
             <div class="mb-3 col-12 col-md-6">
@@ -155,12 +180,11 @@
   const $ = (id) => document.getElementById(id);
 
   function setStatus(msg, type="secondary"){ const s=$("status"); if(s) s.innerHTML=`<span class="text-${type}">${msg}</span>`; }
-
   function parseJSONField(id, name){
     try{ return JSON.parse($(id).value); }catch(e){ throw new Error(`${name} geçerli JSON olmalı: ${e.message}`); }
   }
 
-  // Araç ID listesi üret: {"Küçük":2,"Orta":1} -> ["Küçük_1","Küçük_2","Orta_1"]
+  // --- Araç listesi/konumları ---
   function makeVehicleIds(vehicle_count){
     const out = [];
     for(const [typ, cnt] of Object.entries(vehicle_count||{})){
@@ -170,7 +194,6 @@
     return out;
   }
 
-  // Araç konumları tablosunu çiz
   function renderVehicleLocationsTable(){
     let cities=[], vcount={}, mainDepot="", existing={};
     try{ cities = JSON.parse($("cities").value); }catch(_){}
@@ -182,10 +205,7 @@
     const wrap = $("vehicleLocWrap");
     if(!wrap){ return; }
 
-    // Seçenekler
     const opts = (cities||[]).map(c=>`<option value="${c}">${c}</option>`).join("");
-
-    // Tablo
     let html = `<table class="table table-sm table-hover align-middle mb-0">
       <thead class="table-light"><tr><th style="width:40%">Araç</th><th style="width:60%">Başlangıç Şehri</th></tr></thead><tbody>`;
     if(!vehicles.length){
@@ -195,18 +215,13 @@
         const current = existing[v] && (cities||[]).includes(existing[v]) ? existing[v] : (mainDepot || (cities[0]||""));
         html += `<tr>
           <td class="fw-semibold">${v}</td>
-          <td>
-            <select id="vehloc_${v}" class="form-select form-select-sm">
-              ${opts}
-            </select>
-          </td>
+          <td><select id="vehloc_${v}" class="form-select form-select-sm">${opts}</select></td>
         </tr>`;
       }
     }
     html += `</tbody></table>`;
     wrap.innerHTML = html;
 
-    // Set selected values
     for(const v of vehicles){
       const sel = $("vehloc_"+v);
       if(sel){
@@ -216,7 +231,6 @@
     }
   }
 
-  // Mevcut select'lardan JSON oluştur
   function collectVehicleInitialLocations(){
     let vcount={}; try{ vcount = JSON.parse($("vehicle_count").value); }catch(_){}
     const vehicles = makeVehicleIds(vcount);
@@ -228,6 +242,81 @@
     return out;
   }
 
+  // --- Paketler UI ---
+  function cityOptionsHTML(){
+    let cities=[]; try{ cities = JSON.parse($("cities").value)||[]; }catch(_){}
+    return cities.map(c=>`<option value="${c}">${c}</option>`).join("");
+  }
+
+  function addPackageRow(pkg=null){
+    const tr = document.createElement("tr");
+    const idVal = pkg?.id ?? autoPkgId();
+    tr.innerHTML = `
+      <td><input class="form-control form-control-sm pkg-id" value="${idVal}" /></td>
+      <td><select class="form-select form-select-sm pkg-o">${cityOptionsHTML()}</select></td>
+      <td><select class="form-select form-select-sm pkg-d">${cityOptionsHTML()}</select></td>
+      <td><input type="number" step="0.01" class="form-control form-control-sm pkg-w"  value="${pkg?.agirlik??''}"/></td>
+      <td><input type="number" step="0.01" class="form-control form-control-sm pkg-r"  value="${pkg?.ready_hour??0}"/></td>
+      <td><input type="number" step="0.01" class="form-control form-control-sm pkg-dead" value="${pkg?.deadline_hour??36}"/></td>
+      <td><input type="number" step="0.01" class="form-control form-control-sm pkg-pen" value="${pkg?.ceza??120}"/></td>
+      <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger pkg-del"><i class="bi bi-x-lg"></i></button></td>
+    `;
+    $("pkgTbody").appendChild(tr);
+    const selO = tr.querySelector(".pkg-o");
+    const selD = tr.querySelector(".pkg-d");
+    if(pkg?.baslangic) selO.value = pkg.baslangic;
+    if(pkg?.hedef) selD.value = pkg.hedef;
+    tr.querySelector(".pkg-del").addEventListener("click", ()=>{ tr.remove(); refreshPreview(); });
+    ["change","input"].forEach(evt=>{
+      tr.querySelector(".pkg-id").addEventListener(evt, refreshPreview);
+      tr.querySelector(".pkg-w").addEventListener(evt, refreshPreview);
+      tr.querySelector(".pkg-r").addEventListener(evt, refreshPreview);
+      tr.querySelector(".pkg-dead").addEventListener(evt, refreshPreview);
+      tr.querySelector(".pkg-pen").addEventListener(evt, refreshPreview);
+      selO.addEventListener(evt, refreshPreview);
+      selD.addEventListener(evt, refreshPreview);
+    });
+  }
+
+  function autoPkgId(){
+    const base = "P";
+    let k = 1;
+    const ids = new Set(Array.from(document.querySelectorAll("#pkgTbody .pkg-id")).map(i=>i.value.trim()));
+    while(ids.has(base+k)) k++;
+    return base + k;
+  }
+
+  function collectPackages(){
+    const rows = Array.from(document.querySelectorAll("#pkgTbody tr"));
+    const pkgs = [];
+    const used = new Set();
+    for(const r of rows){
+      const id = r.querySelector(".pkg-id").value.trim();
+      const o  = r.querySelector(".pkg-o").value;
+      const d  = r.querySelector(".pkg-d").value;
+      const w  = parseFloat(r.querySelector(".pkg-w").value);
+      const rr = parseFloat(r.querySelector(".pkg-r").value);
+      const dd = parseFloat(r.querySelector(".pkg-dead").value);
+      const pen= parseFloat(r.querySelector(".pkg-pen").value);
+      if(!id) throw new Error("Paket ID boş olamaz.");
+      if(used.has(id)) throw new Error(`Paket ID tekrarı: ${id}`);
+      used.add(id);
+      pkgs.push({ id, baslangic:o, hedef:d, agirlik:w, ready_hour: rr, deadline_hour: dd, ceza: pen });
+    }
+    return pkgs;
+  }
+
+  function rebuildPackageCitySelects(){
+    const opts = cityOptionsHTML();
+    document.querySelectorAll("#pkgTbody .pkg-o").forEach(s=>{
+      const cur = s.value; s.innerHTML = opts; if(cur) s.value = cur;
+    });
+    document.querySelectorAll("#pkgTbody .pkg-d").forEach(s=>{
+      const cur = s.value; s.innerHTML = opts; if(cur) s.value = cur;
+    });
+  }
+
+  // --- Dataset derleme/kayıt ---
   function buildJSON(){
     const data = {
       cities: parseJSONField("cities","Şehirler"),
@@ -236,13 +325,18 @@
       vehicle_count: parseJSONField("vehicle_count","Araç Sayıları"),
       vehicle_initial_locations: collectVehicleInitialLocations(),
       distances: parseJSONField("distances","Mesafeler"),
-      packages: parseJSONField("packages","Paketler"),
+      packages: collectPackages(),
       minutil_penalty: parseFloat($("minutil_penalty").value)
     };
     if(!data.main_depot) throw new Error("Ana Depo boş olamaz.");
-    // Güvenlik: şehir doğrulaması (seçilmiş şehir listede yoksa ana depoya çek)
+    // Araç konumlarında şehir doğrulaması
     for(const [k,city] of Object.entries(data.vehicle_initial_locations||{})){
       if(!(data.cities||[]).includes(city)) data.vehicle_initial_locations[k] = data.main_depot;
+    }
+    // Paket şehir doğrulaması
+    for(const p of data.packages){
+      if(!(data.cities||[]).includes(p.baslangic)) p.baslangic = data.main_depot;
+      if(!(data.cities||[]).includes(p.hedef))     p.hedef     = data.main_depot;
     }
     return data;
   }
@@ -263,12 +357,23 @@
       $("vehicle_types").value = JSON.stringify(data.vehicle_types ?? {}, null, 2);
       $("vehicle_count").value = JSON.stringify(data.vehicle_count ?? {}, null, 2);
       $("distances").value = JSON.stringify(data.distances ?? [], null, 2);
-      $("packages").value = JSON.stringify(data.packages ?? [], null, 2);
       $("minutil_penalty").value = (data.minutil_penalty ?? 14).toString();
 
-      // Araç konumları state'i ve tablo
+      // Araç konumları
       window.__vehInitLoc = data.vehicle_initial_locations || {};
       renderVehicleLocationsTable();
+
+      // Paketler tablosu
+      $("pkgTbody").innerHTML = "";
+      (data.packages||[]).forEach(p=> addPackageRow({
+        id: p.id,
+        baslangic: p.baslangic,
+        hedef: p.hedef,
+        agirlik: p.agirlik,
+        ready_hour: p.ready_hour ?? p.ready ?? 0,
+        deadline_hour: p.deadline_hour ?? p.deadline ?? p.deadline_suresi ?? 36,
+        ceza: p.ceza
+      }));
 
       refreshPreview();
       setStatus("Dataset yüklendi ✔️", "success");
@@ -318,16 +423,12 @@
 
   // Araç listesi değiştiğinde konum seçimlerini yeniden üret
   $("vehicle_count")?.addEventListener("input", ()=>{
-    // mevcut seçimleri sakla
     try{ window.__vehInitLoc = collectVehicleInitialLocations(); }catch(_){}
-    renderVehicleLocationsTable();
-    refreshPreview();
+    renderVehicleLocationsTable(); refreshPreview();
   });
-  // Şehir listesi ya da ana depo değişince seçenekleri/varsayılanları güncelle
-  $("cities")?.addEventListener("input", ()=>{ renderVehicleLocationsTable(); refreshPreview(); });
+  $("cities")?.addEventListener("input", ()=>{ renderVehicleLocationsTable(); rebuildPackageCitySelects(); refreshPreview(); });
   $("main_depot")?.addEventListener("input", ()=>{ renderVehicleLocationsTable(); refreshPreview(); });
 
-  // Hepsini ana depoya set et
   $("fillDepotBtn")?.addEventListener("click", ()=>{
     const depot = $("main_depot").value.trim();
     let vcount={}; try{ vcount = JSON.parse($("vehicle_count").value); }catch(_){}
@@ -336,16 +437,19 @@
       const sel = $("vehloc_"+v);
       if(sel && depot) sel.value = depot;
     }
-    // state'i de güncelle
     window.__vehInitLoc = collectVehicleInitialLocations();
     refreshPreview();
   });
 
-  // Araç listesini elle yenile (buton)
   $("rebuildVehiclesBtn")?.addEventListener("click", ()=>{
     try{ window.__vehInitLoc = collectVehicleInitialLocations(); }catch(_){}
-    renderVehicleLocationsTable();
-    refreshPreview();
+    renderVehicleLocationsTable(); refreshPreview();
+  });
+
+  // Paket butonları
+  $("addPkgBtn")?.addEventListener("click", ()=>{ addPackageRow(); refreshPreview(); });
+  $("clearPkgsBtn")?.addEventListener("click", ()=>{
+    $("pkgTbody").innerHTML=""; refreshPreview();
   });
 
   (function(){
