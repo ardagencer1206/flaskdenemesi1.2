@@ -607,6 +607,86 @@ Kurallar:
 def health():
     return jsonify({"ok": True})
 
+@app.route("/ai-pack", methods=["POST"])
+def ai_pack():
+    """
+    Görselden paket bilgisi çıkarır.
+    Body: { "image_b64": "data:image/png;base64,....", "cities": [...], "defaults": {...} }
+    Çıktı: { ok: True, package: { id, baslangic, hedef, agirlik, ready_hour, deadline_hour, ceza } }
+    """
+    try:
+        if aoai_client is None:
+            return jsonify({"ok": False, "error": "Azure OpenAI istemcisi yok."}), 500
+
+        payload = request.get_json(force=True) or {}
+        image_b64 = payload.get("image_b64")  # "data:image/...;base64,AAAA"
+        cities = payload.get("cities") or []
+        defaults = payload.get("defaults") or {"ready_hour": 0, "deadline_hour": 36, "ceza": 120}
+
+        if not image_b64 or not isinstance(image_b64, str) or "base64," not in image_b64:
+            return jsonify({"ok": False, "error": "Geçerli data URL (base64) bekleniyor: image_b64"}), 400
+
+        sys_prompt = (
+            "Aşağıdaki görselde bir sevkiyat etiketi/fatura/irsaliye olabilir. "
+            "Amaç: tek bir paket için alanları JSON olarak çıkar:\n"
+            '{ "id": "P?", "baslangic":"<Şehir>", "hedef":"<Şehir>", '
+            '"agirlik": <kg>, "ready_hour": <saat>, "deadline_hour": <saat>, "ceza": <TL/saat> }\n'
+            f"Şehirler yalnızca bu listedekilerden biri olmalı: {cities}. "
+            "Ağırlık kg tahmini yap (sayı). Tarih/saat yoksa ready_hour=0, deadline_hour=36 al. "
+            "Ceza sayısı yoksa defaults.ceza kullan. Sadece geçerli JSON ver."
+        )
+
+        completion = aoai_client.chat.completions.create(
+            model=os.environ.get("AZURE_DEPLOYMENT_NAME", "gpt-4o"),
+            temperature=0.0,
+            max_tokens=500,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Görselden tek paket bilgisi çıkar ve JSON döndür."},
+                        # DİKKAT: 'input_image' DEĞİL -> 'image_url'
+                        {"type": "image_url", "image_url": {"url": image_b64}}
+                    ],
+                },
+            ],
+        )
+
+        raw = completion.choices[0].message.content.strip()
+        # Modelle direkt JSON döndürmesini istedik; yine de güvenceye al:
+        pkg = None
+        try:
+            pkg = json.loads(raw)
+        except Exception:
+            # Bazı modeller ```json ... ``` ile döndürebilir; kaba soy.
+            import re
+            m = re.search(r"\{[\s\S]*\}", raw)
+            if m:
+                pkg = json.loads(m.group(0))
+        if not isinstance(pkg, dict):
+            return jsonify({"ok": False, "error": "Modelden geçerli JSON alınamadı.", "raw": raw}), 400
+
+        # Varsayılanları uygula + tip/alan normalize
+        out = {
+            "id": str(pkg.get("id") or "P?").strip(),
+            "baslangic": (pkg.get("baslangic") or (cities[0] if cities else "")).strip(),
+            "hedef": (pkg.get("hedef") or (cities[0] if cities else "")).strip(),
+            "agirlik": float(pkg.get("agirlik") or 0),
+            "ready_hour": float(pkg.get("ready_hour") if pkg.get("ready_hour") is not None else defaults.get("ready_hour", 0)),
+            "deadline_hour": float(pkg.get("deadline_hour") if pkg.get("deadline_hour") is not None else defaults.get("deadline_hour", 36)),
+            "ceza": float(pkg.get("ceza") if pkg.get("ceza") is not None else defaults.get("ceza", 120)),
+        }
+        # Şehir validasyonu
+        if cities:
+            if out["baslangic"] not in cities: out["baslangic"] = cities[0]
+            if out["hedef"] not in cities: out["hedef"] = cities[0]
+
+        return jsonify({"ok": True, "package": out, "raw": raw})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{e}", "trace": traceback.format_exc()}), 500
+
 
 @app.errorhandler(500)
 def handle_500(e):
@@ -679,3 +759,4 @@ def solve():
 if __name__ == "__main__":
     # Lokal test için:
     app.run(host="0.0.0.0", port=5000, debug=True)
+
