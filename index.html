@@ -33,6 +33,7 @@
     .bubble.user { background: #0d6efd; color: #fff; border-radius: 1rem; padding: .5rem .75rem; margin:.25rem 0; align-self: flex-end; max-width: 90%; }
     .bubble.assistant { background: var(--bs-secondary-bg); color: var(--bs-body-color); border-radius: 1rem; padding: .5rem .75rem; margin:.25rem 0; max-width: 90%; }
     #chatBox { display: flex; flex-direction: column; gap: .25rem; }
+    .accordion-button:focus{ box-shadow: none; }
   </style>
 </head>
 <body>
@@ -104,16 +105,11 @@
                 <label for="main_depot" class="form-label">Ana Depo</label>
                 <input id="main_depot" class="form-control" placeholder="İstanbul" readonly />
               </div>
-              <div class="col-12 col-md-6">
-                <label class="form-label">Zaman Modeli</label>
-                <input class="form-control" value="Hız tabanlı (saat): süre = mesafe / hız" readonly />
-              </div>
             </div>
 
-            <div class="mb-2">
+            <div class="mb-3">
               <label for="vehicle_types" class="form-label">Araç Tipleri (JSON)</label>
-              <textarea id="vehicle_types" class="form-control" rows="7" placeholder='{"Küçük": {"kapasite":...,"hiz_kmh":...}}' readonly></textarea>
-              <div class="form-text"><code>hiz_kmh</code> alanı zorunludur (örn. 70).</div>
+              <textarea id="vehicle_types" class="form-control" rows="6" placeholder='{"Küçük": {...}}' readonly></textarea>
             </div>
 
             <div class="mb-3">
@@ -132,10 +128,9 @@
               <textarea id="distances" class="form-control" rows="5" placeholder='[["İstanbul","Ankara",450], ...]' readonly></textarea>
             </div>
 
-            <div class="mb-2">
+            <div class="mb-3">
               <label for="packages" class="form-label">Paketler (liste)</label>
-              <textarea id="packages" class="form-control" rows="8" placeholder='[{"id":"P1","ready_hour":0,"deadline_hour":36, ...}]' readonly></textarea>
-              <div class="form-text"><code>ready_hour</code> ve <code>deadline_hour</code> saat cinsindendir.</div>
+              <textarea id="packages" class="form-control" rows="7" placeholder='[{"id":"P1", ...}]' readonly></textarea>
             </div>
 
             <div class="row g-3 mb-3">
@@ -211,7 +206,6 @@
           <li>“Dataset’i Güncelle” ile <code>edit.html</code>’de düzenleyip sunucudaki <code>dataset.json</code>’u kaydedin.</li>
           <li>Bu sayfa dataset’i otomatik yeniden yükler (Yeniden Yükle butonuyla da çağırabilirsiniz).</li>
           <li><code>vehicle_initial_locations</code> ile her araç için başlangıç şehri verebilirsiniz. Belirtilmeyenler ana depoda başlar.</li>
-          <li>Zaman modeli dönem içermez; süreler <code>mesafe / hiz_kmh</code> ile hesaplanır. Paketlerde <code>ready_hour</code> ve <code>deadline_hour</code> saat cinsinden verilmelidir.</li>
         </ul>
 
         <!-- Preview Collapse -->
@@ -267,6 +261,21 @@
     const v = Number.isFinite(x) ? x : 0;
     return (Math.round(v*100)/100).toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2}) + " TL";
   }
+  const n2 = (x)=> Number.isFinite(x) ? (Math.round(x*100)/100).toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—";
+
+  function parseJSON(id){ try{ return JSON.parse($(id).value); }catch(_){ return null; } }
+
+  // Mesafe & hız yardımcıları (önizlemeye yüklenen dataset’ten)
+  function getDistanceKm(i,j){
+    const d = parseJSON("distances") || [];
+    for(const [a,b,km] of d){ if((a===i && b===j) || (a===j && b===i)) return +km; }
+    return null;
+  }
+  function getVehicleSpeed(vehicle){
+    const vt = parseJSON("vehicle_types") || {};
+    const typ = (vehicle||"").split("_")[0];
+    return vt[typ]?.hiz_kmh ?? null;
+  }
 
   function buildReadOnlyJSON(){
     // read-only alanlar dataset’ten dolduruldu; burada sadece önizleme/chat için JSON yapıyoruz
@@ -281,6 +290,68 @@
       packages: parse("packages","Paketler"),
       minutil_penalty: parseFloat($("minutil_penalty").value)
     };
+  }
+
+  function renderPackageTimelines(r){
+    // r.packages[*].route bekleniyor; yoksa geç
+    const pkgs = r.packages || [];
+    if(!pkgs.length) return "";
+
+    let html = `<h6 class="mt-4 mb-2">Paket Zaman Çizelgeleri</h6>
+    <div class="accordion" id="pkgAccordion">`;
+
+    pkgs.forEach((p,idx)=>{
+      const rid = `pkgitem_${idx}`;
+      const route = Array.isArray(p.route) ? p.route : [];
+      if(!route.length) return;
+
+      // satırlar
+      let rows = "";
+      route.forEach((step, i)=>{
+        const from = step.from || step.i || "—";
+        const to   = step.to   || step.j || "—";
+        const veh  = step.vehicle || "—";
+        const km   = step.km ?? getDistanceKm(from,to);
+        const durH = step.duration_h ?? step.travel_time_h ?? (()=>{
+          const v = getVehicleSpeed(veh);
+          return (Number.isFinite(km) && Number.isFinite(v) && v>0) ? (km / v) : null;
+        })();
+
+        rows += `<tr>
+          <td class="text-center">${i+1}</td>
+          <td>${veh}</td>
+          <td>${from} → ${to}</td>
+          <td>${Number.isFinite(km)? (km.toLocaleString("tr-TR"))+" km" : "—"}</td>
+          <td>${Number.isFinite(durH)? n2(durH)+" saat" : "—"}</td>
+        </tr>`;
+      });
+
+      html += `
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#${rid}">
+            <span class="me-2 badge text-bg-secondary">${p.id}</span>
+            <span class="me-2">${p.origin||p.baslangic} → ${p.dest||p.hedef}</span>
+            <span class="small text-secondary">| Teslim: ${p.delivered_at ?? "—"}${(p.on_time===false)?" (gecikmeli)":""}</span>
+          </button>
+        </h2>
+        <div id="${rid}" class="accordion-collapse collapse" data-bs-parent="#pkgAccordion">
+          <div class="accordion-body p-2">
+            <div class="table-responsive">
+              <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-light">
+                  <tr><th style="width:1%" class="text-center">#</th><th>Araç</th><th>Güzergâh</th><th>Mesafe</th><th>Süre (saat)</th></tr>
+                </thead>
+                <tbody>${rows || `<tr><td colspan="5" class="text-secondary">Rota bilgisi yok.</td></tr>`}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    });
+
+    html += `</div>`;
+    return html;
   }
 
   function renderResults(resp){
@@ -305,7 +376,6 @@
           <tr><td>Gecikme</td><td>${fmtTL(cb.lateness)}</td></tr>
           <tr><td>Min. doluluk açığı</td><td>${fmtTL(cb.min_util_gap)}</td></tr>
         </tbody></table></div>`;
-
     if ((r.vehicle_routes||[]).length){
       html += `<h6>Araç Rotaları</h6>`;
       r.vehicle_routes.forEach(vr=>{
@@ -314,14 +384,8 @@
           <div class="table-responsive"><table class="table table-sm table-hover mb-0">
           <thead class="table-light"><tr><th>Rota</th><th>Mesafe</th><th>Süre (saat)</th><th>Yük</th><th>Doluluk</th><th>Paketler</th></tr></thead><tbody>`;
         (vr.legs||[]).forEach(l=>{
-          html += `<tr>
-            <td>${l.from} → ${l.to}</td>
-            <td>${l.km} km</td>
-            <td>${(l.travel_hours||0).toFixed(2)}</td>
-            <td>${Math.round(l.load_kg)} kg</td>
-            <td>${(l.utilization_pct||0).toFixed(1)}%</td>
-            <td>${(l.packages||[]).length?l.packages.join(", "):"—"}</td>
-          </tr>`;
+          const duration = (Number.isFinite(l.duration_h)? n2(l.duration_h)+" s": "—");
+          html += `<tr><td>${l.from} → ${l.to}</td><td>${(l.km??0).toLocaleString("tr-TR")} km</td><td>${duration}</td><td>${Math.round(l.load_kg)} kg</td><td>${(l.utilization_pct||0).toFixed(1)}%</td><td>${(l.packages||[]).length?l.packages.join(", "):"—"}</td></tr>`;
         });
         html += `</tbody></table></div></div>`;
       });
@@ -329,24 +393,14 @@
     if ((r.packages||[]).length){
       html += `<h6 class="mt-3">Paketler</h6>
       <div class="table-responsive"><table class="table table-sm table-hover align-middle">
-      <thead class="table-light"><tr>
-        <th>ID</th><th>Güzergâh</th><th>Hazır (saat)</th><th>Termin (saat)</th>
-        <th>Teslim (saat)</th><th>Toplam Süre</th><th>Durum</th><th>Ceza</th>
-      </tr></thead><tbody>`;
+      <thead class="table-light"><tr><th>ID</th><th>Güzergâh</th><th>Hazır</th><th>Termin (saat)</th><th>Teslim (saat)</th><th>Durum</th><th>Ceza</th></tr></thead><tbody>`;
       r.packages.forEach(p=>{
         const delivered = (p.delivered_at!==null && p.delivered_at!==undefined);
-        html += `<tr>
-          <td><b>${p.id}</b></td>
-          <td>${p.origin} → ${p.dest}</td>
-          <td>${p.ready_hour}</td>
-          <td>${p.deadline_by}</td>
-          <td>${delivered? p.delivered_at.toFixed(2) : "—"}</td>
-          <td>${(p.total_travel_hours||0).toFixed(2)} s</td>
-          <td>${delivered? (p.on_time? "✅ Zamanında":"⚠️ Gecikmeli") : "❌ Teslim yok"}</td>
-          <td>${fmtTL(p.lateness_penalty||0)}</td>
-        </tr>`;
+        html += `<tr><td><b>${p.id}</b></td><td>${p.origin||p.baslangic} → ${p.dest||p.hedef}</td><td>${p.ready ?? p.ready_hour ?? 0}</td><td>${p.deadline_by ?? p.deadline_hour ?? "—"}</td><td>${delivered? p.delivered_at : "—"}</td><td>${delivered? (p.on_time? "✅ Zamanında":"⚠️ Gecikmeli") : "❌ Teslim yok"}</td><td>${fmtTL(p.lateness_penalty||0)}</td></tr>`;
       });
       html += `</tbody></table></div>`;
+      // yeni: paket zaman çizelgeleri (akordeon)
+      html += renderPackageTimelines(r);
     }
     el.innerHTML = html;
   }
