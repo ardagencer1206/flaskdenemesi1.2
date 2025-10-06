@@ -262,6 +262,7 @@
     return (Math.round(v*100)/100).toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2}) + " TL";
   }
   const n2 = (x)=> Number.isFinite(x) ? (Math.round(x*100)/100).toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—";
+  const fmtHour = (x)=> Number.isFinite(x) ? `${n2(x)} saat` : "—";
 
   function parseJSON(id){ try{ return JSON.parse($(id).value); }catch(_){ return null; } }
 
@@ -292,37 +293,49 @@
     };
   }
 
+  // ----- Paket Zaman Çizelgesi -----
   function renderPackageTimelines(r){
-    // r.packages[*].route bekleniyor; yoksa geç
     const pkgs = r.packages || [];
     if(!pkgs.length) return "";
 
-    let html = `<h6 class="mt-4 mb-2">Paket Zaman Çizelgeleri</h6>
+    let html = `<h6 class="mt-4 mb-2">Paket Akışları (Zaman Çizelgesi)</h6>
     <div class="accordion" id="pkgAccordion">`;
 
     pkgs.forEach((p,idx)=>{
       const rid = `pkgitem_${idx}`;
       const route = Array.isArray(p.route) ? p.route : [];
-      if(!route.length) return;
+      // Benzersiz araçlar
+      const vehicles = [...new Set(route.map(s => s.vehicle).filter(Boolean))];
+      // Toplam süre & teslim
+      const totalHours = Number.isFinite(p.total_travel_hours) ? p.total_travel_hours
+                         : route.reduce((a,s)=> a + (s.travel_hours ?? s.duration_h ?? 0), 0);
+      const deliveredAt = Number.isFinite(p.delivered_at) ? p.delivered_at : (p.ready_hour ?? 0) + totalHours;
 
-      // satırlar
+      // satırlar + zaman birikimi
       let rows = "";
+      let t = p.ready_hour ?? p.ready ?? 0; // alım zamanı
       route.forEach((step, i)=>{
         const from = step.from || step.i || "—";
         const to   = step.to   || step.j || "—";
         const veh  = step.vehicle || "—";
         const km   = step.km ?? getDistanceKm(from,to);
-        const durH = step.duration_h ?? step.travel_time_h ?? (()=>{
+        const durH = step.duration_h ?? step.travel_hours ?? (()=>{
           const v = getVehicleSpeed(veh);
           return (Number.isFinite(km) && Number.isFinite(v) && v>0) ? (km / v) : null;
         })();
+
+        const start = t;
+        const end   = Number.isFinite(durH) ? (t + durH) : null;
+        if(Number.isFinite(end)) t = end;
 
         rows += `<tr>
           <td class="text-center">${i+1}</td>
           <td>${veh}</td>
           <td>${from} → ${to}</td>
           <td>${Number.isFinite(km)? (km.toLocaleString("tr-TR"))+" km" : "—"}</td>
-          <td>${Number.isFinite(durH)? n2(durH)+" saat" : "—"}</td>
+          <td>${fmtHour(durH)}</td>
+          <td>${fmtHour(start)}</td>
+          <td>${fmtHour(end)}</td>
         </tr>`;
       });
 
@@ -332,7 +345,9 @@
           <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#${rid}">
             <span class="me-2 badge text-bg-secondary">${p.id}</span>
             <span class="me-2">${p.origin||p.baslangic} → ${p.dest||p.hedef}</span>
-            <span class="small text-secondary">| Teslim: ${p.delivered_at ?? "—"}${(p.on_time===false)?" (gecikmeli)":""}</span>
+            <span class="me-2 badge text-bg-light">Ağırlık: ${(p.weight ?? p.agirlik ?? 0)} kg</span>
+            <span class="me-2 badge text-bg-info-subtle text-info-emphasis">İlk Alım: ${fmtHour(p.ready_hour ?? p.ready ?? 0)}</span>
+            <span class="small text-secondary">| Araç(lar): ${vehicles.length?vehicles.join(", "):"—"} • Toplam: ${fmtHour(totalHours)} • Teslim: ${fmtHour(deliveredAt)} ${p.on_time===false?"(gecikmeli)":""}</span>
           </button>
         </h2>
         <div id="${rid}" class="accordion-collapse collapse" data-bs-parent="#pkgAccordion">
@@ -340,9 +355,17 @@
             <div class="table-responsive">
               <table class="table table-sm table-hover align-middle mb-0">
                 <thead class="table-light">
-                  <tr><th style="width:1%" class="text-center">#</th><th>Araç</th><th>Güzergâh</th><th>Mesafe</th><th>Süre (saat)</th></tr>
+                  <tr>
+                    <th style="width:1%" class="text-center">#</th>
+                    <th>Araç</th>
+                    <th>Güzergâh</th>
+                    <th>Mesafe</th>
+                    <th>Süre</th>
+                    <th>Başlangıç</th>
+                    <th>Bitiş</th>
+                  </tr>
                 </thead>
-                <tbody>${rows || `<tr><td colspan="5" class="text-secondary">Rota bilgisi yok.</td></tr>`}</tbody>
+                <tbody>${rows || `<tr><td colspan="7" class="text-secondary">Rota bilgisi yok.</td></tr>`}</tbody>
               </table>
             </div>
           </div>
@@ -376,6 +399,8 @@
           <tr><td>Gecikme</td><td>${fmtTL(cb.lateness)}</td></tr>
           <tr><td>Min. doluluk açığı</td><td>${fmtTL(cb.min_util_gap)}</td></tr>
         </tbody></table></div>`;
+
+    // Araç Rotaları (ayrı blok)
     if ((r.vehicle_routes||[]).length){
       html += `<h6>Araç Rotaları</h6>`;
       r.vehicle_routes.forEach(vr=>{
@@ -384,14 +409,16 @@
           <div class="table-responsive"><table class="table table-sm table-hover mb-0">
           <thead class="table-light"><tr><th>Rota</th><th>Mesafe</th><th>Süre (saat)</th><th>Yük</th><th>Doluluk</th><th>Paketler</th></tr></thead><tbody>`;
         (vr.legs||[]).forEach(l=>{
-          const duration = (Number.isFinite(l.duration_h)? n2(l.duration_h)+" s": "—");
-          html += `<tr><td>${l.from} → ${l.to}</td><td>${(l.km??0).toLocaleString("tr-TR")} km</td><td>${duration}</td><td>${Math.round(l.load_kg)} kg</td><td>${(l.utilization_pct||0).toFixed(1)}%</td><td>${(l.packages||[]).length?l.packages.join(", "):"—"}</td></tr>`;
+          const dur = l.duration_h ?? l.travel_hours ?? (()=>{ const v=getVehicleSpeed(vr.vehicle); return (Number.isFinite(l.km)&&Number.isFinite(v)&&v>0)?(l.km/v):null; })();
+          html += `<tr><td>${l.from} → ${l.to}</td><td>${(l.km??0).toLocaleString("tr-TR")} km</td><td>${fmtHour(dur)}</td><td>${Math.round(l.load_kg||0)} kg</td><td>${(l.utilization_pct||0).toFixed(1)}%</td><td>${(l.packages||[]).length?l.packages.join(", "):"—"}</td></tr>`;
         });
         html += `</tbody></table></div></div>`;
       });
     }
+
+    // Paketler üst liste (hızlı özet)
     if ((r.packages||[]).length){
-      html += `<h6 class="mt-3">Paketler</h6>
+      html += `<h6 class="mt-3">Paket Özeti</h6>
       <div class="table-responsive"><table class="table table-sm table-hover align-middle">
       <thead class="table-light"><tr><th>ID</th><th>Güzergâh</th><th>Hazır</th><th>Termin (saat)</th><th>Teslim (saat)</th><th>Durum</th><th>Ceza</th></tr></thead><tbody>`;
       r.packages.forEach(p=>{
@@ -399,9 +426,11 @@
         html += `<tr><td><b>${p.id}</b></td><td>${p.origin||p.baslangic} → ${p.dest||p.hedef}</td><td>${p.ready ?? p.ready_hour ?? 0}</td><td>${p.deadline_by ?? p.deadline_hour ?? "—"}</td><td>${delivered? p.delivered_at : "—"}</td><td>${delivered? (p.on_time? "✅ Zamanında":"⚠️ Gecikmeli") : "❌ Teslim yok"}</td><td>${fmtTL(p.lateness_penalty||0)}</td></tr>`;
       });
       html += `</tbody></table></div>`;
-      // yeni: paket zaman çizelgeleri (akordeon)
+
+      // Ayrıntılı zaman çizelgesi (akordeon)
       html += renderPackageTimelines(r);
     }
+
     el.innerHTML = html;
   }
 
