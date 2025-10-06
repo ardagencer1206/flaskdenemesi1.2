@@ -1,6 +1,6 @@
 {
   "cities": ["İstanbul", "Ankara", "İzmir", "Bursa", "Eskişehir"],
-  "main_depot": "İstanbul",
+  "main_depot": "Ankara",
 
   "vehicle_types": {
     "Küçük": {
