@@ -1,263 +1,142 @@
-from flask import Flask, request, jsonify, send_from_directory, session, redirect, url_for
-import sqlite3
-from pathlib import Path
-from werkzeug.security import generate_password_hash, check_password_hash
+# -*- coding: utf-8 -*-
 import os
-import secrets
+from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+from flask import Flask, request, jsonify, session, redirect, send_from_directory
+from werkzeug.security import generate_password_hash, check_password_hash
 
-# Database path
-DB_PATH = Path(__file__).parent / "users.db"
+# SQLAlchemy ayarı (SQLite varsayılan, Railway'de DATABASE_URL ile Postgres)
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, text
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-# ------------------------
-# Database Connection & Init
-# ------------------------
-def get_db():
-    """Veritabanı bağlantısı oluşturur"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+APP_SECRET = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///auth.sqlite3")
 
-def init_db():
-    """Veritabanı tablosunu oluşturur"""
-    conn = get_db()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.commit()
-    except Exception as e:
-        print(f"Database init error: {e}")
-    finally:
-        conn.close()
+# Postgres URL fix (sqlalchemy için 'postgres' -> 'postgresql')
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Initialize database on startup
-init_db()
+engine = create_engine(DATABASE_URL, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+Base = declarative_base()
 
-# ------------------------
-# CORS Support (if needed)
-# ------------------------
-@app.after_request
-def after_request(response):
-    """CORS headers ekler (gerekirse)"""
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
-    return response
+class User(Base):
+    __tablename__ = "users"
+    id         = Column(Integer, primary_key=True)
+    email      = Column(String(255), unique=True, index=True, nullable=False)
+    password   = Column(String(255), nullable=False)  # hashed
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-# ------------------------
-# Register Route
-# ------------------------
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    """Kullanıcı kayıt işlemi"""
-    if request.method == "GET":
-        try:
-            return send_from_directory(".", "register.html")
-        except FileNotFoundError:
-            return jsonify({"ok": False, "error": "register.html bulunamadı"}), 404
-    
-    # POST - Kayıt işlemi
-    try:
-        # JSON veya form data kabul et
-        data = request.get_json(silent=True) or request.form
-        
-        # Verileri al ve temizle
-        name = (data.get("name") or "").strip()
-        email = (data.get("email") or "").strip().lower()
-        password = data.get("password") or ""
-        
-        # Validasyon
-        if not name:
-            return jsonify({"ok": False, "error": "Ad Soyad gerekli"}), 400
-        
-        if len(name) < 2:
-            return jsonify({"ok": False, "error": "Ad Soyad en az 2 karakter olmalı"}), 400
-        
-        if not email:
-            return jsonify({"ok": False, "error": "E-posta gerekli"}), 400
-        
-        if "@" not in email or "." not in email:
-            return jsonify({"ok": False, "error": "Geçerli bir e-posta adresi girin"}), 400
-        
-        if not password:
-            return jsonify({"ok": False, "error": "Şifre gerekli"}), 400
-        
-        if len(password) < 8:
-            return jsonify({"ok": False, "error": "Şifre en az 8 karakter olmalı"}), 400
-        
-        # Şifreyi hashle
-        pwd_hash = generate_password_hash(password, method='pbkdf2:sha256')
-        
-        # Veritabanına kaydet
-        conn = get_db()
-        try:
-            conn.execute(
-                "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
-                (name, email, pwd_hash)
-            )
-            conn.commit()
-        except sqlite3.IntegrityError:
-            return jsonify({"ok": False, "error": "Bu e-posta adresi zaten kayıtlı"}), 409
-        finally:
-            conn.close()
-        
-        return jsonify({"ok": True, "message": "Kayıt başarılı"}), 201
-    
-    except Exception as e:
-        print(f"Register error: {e}")
-        return jsonify({"ok": False, "error": "Sunucu hatası"}), 500
+Base.metadata.create_all(bind=engine)
 
-# ------------------------
-# Login Route
-# ------------------------
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    """Kullanıcı giriş işlemi"""
-    if request.method == "GET":
-        try:
-            return send_from_directory(".", "login.html")
-        except FileNotFoundError:
-            return jsonify({"ok": False, "error": "login.html bulunamadı"}), 404
-    
-    # POST - Giriş işlemi
-    try:
-        data = request.get_json(silent=True) or request.form
-        email = (data.get("email") or "").strip().lower()
-        password = data.get("password") or ""
-        
-        # Validasyon
-        if not email or not password:
-            return jsonify({"ok": False, "error": "E-posta ve şifre gerekli"}), 400
-        
-        # Kullanıcıyı bul
-        conn = get_db()
-        user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-        conn.close()
-        
-        # Kullanıcı kontrolü ve şifre doğrulama
-        if not user:
-            return jsonify({"ok": False, "error": "Geçersiz e-posta veya şifre"}), 401
-        
-        if not check_password_hash(user["password_hash"], password):
-            return jsonify({"ok": False, "error": "Geçersiz e-posta veya şifre"}), 401
-        
-        # Session oluştur
-        session["user_id"] = user["id"]
-        session["email"] = user["email"]
-        session["name"] = user["name"]
-        
-        return jsonify({
-            "ok": True, 
-            "message": "Giriş başarılı",
-            "user": {
-                "id": user["id"],
-                "name": user["name"],
-                "email": user["email"]
-            }
-        }), 200
-    
-    except Exception as e:
-        print(f"Login error: {e}")
-        return jsonify({"ok": False, "error": "Sunucu hatası"}), 500
+app = Flask(__name__, static_folder=".", static_url_path="")
+app.secret_key = APP_SECRET
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
-# ------------------------
-# Logout Route
-# ------------------------
-@app.route("/logout")
-def logout():
-    """Kullanıcı çıkış işlemi"""
-    session.clear()
-    return redirect(url_for("login"))
+# ---- Basit login koruması (index.html ve / için) ----
+PUBLIC_PATHS = {
+    "/login.html", "/register.html",
+    "/auth/login", "/auth/register", "/auth/logout", "/auth/me",
+    "/favicon.ico", "/robots.txt"
+}
 
-# ------------------------
-# Protected Routes
-# ------------------------
-@app.route("/")
-def index():
-    """Ana sayfa (giriş kontrolü ile)"""
-    if "user_id" not in session:
-        return redirect(url_for("login"))
-    
-    try:
-        return send_from_directory(".", "index.html")
-    except FileNotFoundError:
-        return "<h1>Ana Sayfa</h1><p>Hoş geldiniz!</p><a href='/logout'>Çıkış Yap</a>", 200
+def is_static_file(path: str) -> bool:
+    # index.html dışındaki varlıklar (css/js/png/svg) için engel çıkarma
+    return any(path.endswith(ext) for ext in (".css",".js",".png",".jpg",".jpeg",".svg",".ico",".map",".txt",".json",".woff",".woff2",".ttf"))
 
-@app.route("/dashboard")
-def dashboard():
-    """Dashboard sayfası (giriş kontrolü ile)"""
-    if "user_id" not in session:
-        return redirect(url_for("login"))
-    
-    return jsonify({
-        "ok": True,
-        "user": {
-            "id": session.get("user_id"),
-            "name": session.get("name"),
-            "email": session.get("email")
-        }
-    })
+@app.before_request
+def require_login():
+    p = request.path
+    if p == "/":  # ana sayfa
+        # index.html'i koruma altına al
+        if not session.get("uid"):
+            return redirect("/login.html")
+        return
+    if p in PUBLIC_PATHS or is_static_file(p):
+        return
+    # index.html’i doğrudan isteyenler
+    if p.lower() == "/index.html":
+        if not session.get("uid"):
+            return redirect("/login.html")
+        return
 
-# ------------------------
-# API: Check Auth Status
-# ------------------------
-@app.route("/api/auth/status")
-def auth_status():
-    """Kullanıcının giriş durumunu kontrol eder"""
-    if "user_id" in session:
-        return jsonify({
-            "ok": True,
-            "authenticated": True,
-            "user": {
-                "id": session.get("user_id"),
-                "name": session.get("name"),
-                "email": session.get("email")
-            }
-        })
-    else:
-        return jsonify({
-            "ok": True,
-            "authenticated": False
-        })
+# ---- Statik sayfaları servis et (login/register) ----
+@app.route("/login.html")
+def serve_login():
+    return send_from_directory(".", "login.html")
 
-# ------------------------
-# Health Check (Railway için)
-# ------------------------
-@app.route("/health")
+@app.route("/register.html")
+def serve_register():
+    return send_from_directory(".", "register.html")
+
+# ---- Basit sağlık ----
+@app.route("/auth/health")
 def health():
-    """Sunucu sağlık kontrolü"""
-    return jsonify({"status": "healthy", "ok": True}), 200
+    return jsonify({"ok": True})
 
-# ------------------------
-# Error Handlers
-# ------------------------
-@app.errorhandler(404)
-def not_found(e):
-    """404 hatası için özel yanıt"""
-    if request.path.startswith('/api/'):
-        return jsonify({"ok": False, "error": "Endpoint bulunamadı"}), 404
-    return "<h1>404</h1><p>Sayfa bulunamadı</p><a href='/'>Ana Sayfa</a>", 404
+# ---- Kayıt ----
+@app.route("/auth/register", methods=["POST"])
+def register():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    if not email or not password:
+        return jsonify({"ok": False, "error": "E-posta ve şifre zorunlu."}), 400
+    if len(password) < 8:
+        return jsonify({"ok": False, "error": "Şifre en az 8 karakter olmalı."}), 400
+    with SessionLocal() as db:
+        exists = db.query(User).filter(User.email == email).first()
+        if exists:
+            return jsonify({"ok": False, "error": "Bu e-posta ile kayıt zaten var."}), 409
+        user = User(email=email, password=generate_password_hash(password))
+        db.add(user); db.commit()
+    return jsonify({"ok": True})
 
-@app.errorhandler(500)
-def server_error(e):
-    """500 hatası için özel yanıt"""
-    return jsonify({"ok": False, "error": "Sunucu hatası"}), 500
+# ---- Giriş ----
+@app.route("/auth/login", methods=["POST"])
+def login():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    if not email or not password:
+        return jsonify({"ok": False, "error": "E-posta ve şifre zorunlu."}), 400
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        if not user or not check_password_hash(user.password, password):
+            return jsonify({"ok": False, "error": "Geçersiz e-posta/şifre."}), 401
+        session["uid"] = user.id
+        session["email"] = user.email
+    return jsonify({"ok": True})
 
-# ------------------------
-# Run App
-# ------------------------
+# ---- Çıkış ----
+@app.route("/auth/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+# ---- Aktif kullanıcı ----
+@app.route("/auth/me", methods=["GET"])
+def me():
+    if not session.get("uid"):
+        return jsonify({"ok": True, "authenticated": False})
+    return jsonify({"ok": True, "authenticated": True, "email": session.get("email")})
+
+# ---- Ana sayfayı (korumalı) servis etme örneği ----
+@app.route("/")
+def home():
+    # before_request zaten kontrol etti; sadece dosyayı döndürüyoruz
+    return send_from_directory(".", "index.html")
+
+# ---- Opsiyonel: /index.html doğrudan çağrısı (korumalı) ----
+@app.route("/index.html")
+def index_file():
+    return send_from_directory(".", "index.html")
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("DEBUG", "False").lower() == "true"
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    # Railway default port
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
