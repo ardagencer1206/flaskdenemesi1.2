@@ -270,11 +270,15 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
 
     # Min. doluluk (ana depodan çıkışlar için soft)
     def min_utilization_soft_rule(m, v):
-        departs = sum(m.x[v, main_depot, j] for j in m.Cities if j != main_depot)
-        loaded  = sum(m.PackageWeight[p] * m.y[p, v, main_depot, j] for p in m.Packages for j in m.Cities if j != main_depot)
-        target  = m.MinUtilization[v] * m.VehicleCapacity[v] * departs
+        start_city = init_loc[v]  # her aracın gerçek başlangıç şehri
+        departures = sum(m.x[v, start_city, j] for j in m.Cities if j != start_city)  # 0..N
+        loaded = sum(
+            m.PackageWeight[p] * m.y[p, v, start_city, j]
+            for p in m.Packages for j in m.Cities if j != start_city
+        )
+        target = m.MinUtilization[v] * m.VehicleCapacity[v] * departures
         return loaded + m.minutil_shortfall[v] >= target
-    model.min_utilization_soft = Constraint(model.Vehicles, rule=min_utilization_soft_rule)
+    model.min_utilization_soft = Constraint(model.Vehicles, rule=min_utilization_soft_rule)    
 
     # Araç şehir ziyaret bayrakları: eğer bir kente giriyor/çıkıyorsa w=1
     def visit_out_imp(m, v, n):
@@ -690,3 +694,4 @@ def solve():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
