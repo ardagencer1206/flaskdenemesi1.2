@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
 import json
-import math
 import traceback
 from typing import Dict, Any, List, Tuple
 
@@ -10,7 +9,7 @@ from pathlib import Path
 
 from pyomo.environ import (
     ConcreteModel, Set, Param, Var, Binary, NonNegativeReals, Objective, minimize,
-    Constraint, Any as PyAny, value, SolverFactory, Reals
+    Constraint, Any as PyAny, value, SolverFactory
 )
 
 # =========================================================
@@ -179,6 +178,9 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
     model.PackageDeadline = Param(model.Packages, initialize=lambda m, p: packages[p]["deadline_hour"])
     model.LatePenalty     = Param(model.Packages, initialize=lambda m, p: packages[p]["ceza_maliyeti"])
 
+    # Min doluluk ceza katsayısı modeli içinde parametre:
+    model.MinUtilPenalty  = Param(initialize=MINUTIL_PENALTY)
+
     # Süreler (saat)
     travel_time = {}
     for v in vehicles:
@@ -189,20 +191,14 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
                 travel_time[(v, i, j)] = dkm / spd
 
     # ---------- Değişkenler ----------
-    # Araç kenarı
-    model.x = Var(model.Vehicles, model.Cities, model.Cities, domain=Binary)
-    # Paket kenarı
-    model.y = Var(model.Packages, model.Vehicles, model.Cities, model.Cities, domain=Binary)
-    # Araç kullanımı
-    model.z = Var(model.Vehicles, domain=Binary)
-    # Gecikme
-    model.lateness = Var(model.Packages, domain=NonNegativeReals)
-    # Min. doluluk açığı
-    model.minutil_shortfall = Var(model.Vehicles, model.Cities, model.Cities, domain=NonNegativeReals)
+    model.x = Var(model.Vehicles, model.Cities, model.Cities, domain=Binary)  # Araç kenarı
+    model.y = Var(model.Packages, model.Vehicles, model.Cities, model.Cities, domain=Binary)  # Paket kenarı
+    model.z = Var(model.Vehicles, domain=Binary)  # Araç kullanımı
+    model.lateness = Var(model.Packages, domain=NonNegativeReals)  # Gecikme
+    model.minutil_shortfall = Var(model.Vehicles, model.Cities, model.Cities, domain=NonNegativeReals)  # Min. doluluk açığı
 
-    # Araç-şehir ziyaret bayrağı
+    # Araç-şehir ziyaret bayrağı ve bağlanırlık akışı
     model.w = Var(model.Vehicles, model.Cities, domain=Binary)
-    # Bağlanırlık akışı (araç bazında)
     model.f = Var(model.Vehicles, model.Cities, model.Cities, domain=NonNegativeReals)
 
     # ---------- Amaç ----------
@@ -211,38 +207,33 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
                         for v in m.Vehicles for i in m.Cities for j in m.Cities if i != j)
         fixed     = sum(m.FixedCost[v] * m.z[v] for v in m.Vehicles)
         late      = sum(m.LatePenalty[p] * m.lateness[p] for p in m.Packages)
-        minutil = MINUTIL_PENALTY * sum(
+        minutil   = m.MinUtilPenalty * sum(
             m.minutil_shortfall[v, i, j]
             for v in m.Vehicles for i in m.Cities for j in m.Cities if i != j
         )
-
-
-        # Paket kenarlarına küçük mesafe maliyeti -> gereksiz paket döngüleri açılmasın
-        eps_cost  = PACKAGE_EPS_TL_PER_KM * sum(m.Distance[i, j] * m.y[p, v, i, j]
-                        for p in m.Packages for v in m.Vehicles for i in m.Cities for j in m.Cities if i != j)
+        eps_cost  = PACKAGE_EPS_TL_PER_KM * sum(
+            m.Distance[i, j] * m.y[p, v, i, j]
+            for p in m.Packages for v in m.Vehicles for i in m.Cities for j in m.Cities if i != j
+        )
         return transport + fixed + late + minutil + eps_cost
     model.obj = Objective(rule=objective_rule, sense=minimize)
 
     # ---------- Kısıtlar ----------
-    # Araç kullanıldı bayrağı
     def used_vehicle_flag_rule(m, v, i, j):
         if i == j: return Constraint.Skip
         return m.z[v] >= m.x[v, i, j]
     model.used_vehicle_flag = Constraint(model.Vehicles, model.Cities, model.Cities, rule=used_vehicle_flag_rule)
 
-    # Paket başlangıçtan tam 1 çıkış
     def package_origin_rule(m, p):
         o = m.PackageOrigin[p]
         return sum(m.y[p, v, o, j] for v in m.Vehicles for j in m.Cities if j != o) == 1
     model.package_origin_constraint = Constraint(model.Packages, rule=package_origin_rule)
 
-    # Paket hedefe tam 1 varış
     def package_destination_rule(m, p):
         d = m.PackageDest[p]
         return sum(m.y[p, v, i, d] for v in m.Vehicles for i in m.Cities if i != d) == 1
     model.package_destination_constraint = Constraint(model.Packages, rule=package_destination_rule)
 
-    # Paket – ara şehirlerde akış korunumu
     def package_flow_conserv(m, p, k):
         o, d = m.PackageOrigin[p], m.PackageDest[p]
         if k == o or k == d: return Constraint.Skip
@@ -251,7 +242,7 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
         return inflow == outflow
     model.package_flow_conserv = Constraint(model.Packages, model.Cities, rule=package_flow_conserv)
 
-    # Paket – her şehirde en fazla bir giriş ve bir çıkış (disjoint cycle'ları kısıtlar)
+    # Paket – şehir başına en fazla bir giriş ve bir çıkış
     def pkg_in_deg_le1(m, p, k):
         return sum(m.y[p, v, i, k] for v in m.Vehicles for i in m.Cities if i != k) <= 1
     def pkg_out_deg_le1(m, p, k):
@@ -259,34 +250,26 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
     model.pkg_in_deg_le1  = Constraint(model.Packages, model.Cities, rule=pkg_in_deg_le1)
     model.pkg_out_deg_le1 = Constraint(model.Packages, model.Cities, rule=pkg_out_deg_le1)
 
-    # Paket kenarı ancak araç kenarı varsa (y <= x)
     def y_le_x_rule(m, p, v, i, j):
         if i == j: return Constraint.Skip
         return m.y[p, v, i, j] <= m.x[v, i, j]
     model.y_le_x = Constraint(model.Packages, model.Vehicles, model.Cities, model.Cities, rule=y_le_x_rule)
 
-    # Kapasite (her kenarda)
     def capacity_rule(m, v, i, j):
         if i == j: return Constraint.Skip
         load = sum(m.PackageWeight[p] * m.y[p, v, i, j] for p in m.Packages)
         return load <= m.VehicleCapacity[v]
     model.capacity_constraint = Constraint(model.Vehicles, model.Cities, model.Cities, rule=capacity_rule)
 
-    # Min. doluluk (ana depodan çıkışlar için soft)
-# Her kenar (v,i->j) için: taşınan_yük + shortfall ≥ min_util * kapasite * x[v,i,j]
+    # Min. doluluk (tüm kenarlarda soft)
     def min_utilization_soft_arc_rule(m, v, i, j):
-        if i == j:
-            return Constraint.Skip
+        if i == j: return Constraint.Skip
         carried = sum(m.PackageWeight[p] * m.y[p, v, i, j] for p in m.Packages)
         target  = m.MinUtilization[v] * m.VehicleCapacity[v] * m.x[v, i, j]
         return carried + m.minutil_shortfall[v, i, j] >= target
+    model.min_utilization_soft_arc = Constraint(model.Vehicles, model.Cities, model.Cities, rule=min_utilization_soft_arc_rule)
 
-    model.min_utilization_soft_arc = Constraint(
-        model.Vehicles, model.Cities, model.Cities, rule=min_utilization_soft_arc_rule
-    )
-   
-
-    # Araç şehir ziyaret bayrakları: eğer bir kente giriyor/çıkıyorsa w=1
+    # Ziyaret bayrakları
     def visit_out_imp(m, v, n):
         return sum(m.x[v, n, j] for j in m.Cities if j != n) <= m.w[v, n]
     def visit_in_imp(m, v, n):
@@ -294,35 +277,29 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
     model.visit_out_imp = Constraint(model.Vehicles, model.Cities, rule=visit_out_imp)
     model.visit_in_imp  = Constraint(model.Vehicles, model.Cities, rule=visit_in_imp)
 
-    # Araç – giriş çıkış denklikleri (init'te çıkış = giriş + r, diğerlerinde giriş = çıkış)
+    # Araç derece dengesi
     def vehicle_degree_balance(m, v, n):
         outn = sum(m.x[v, n, j] for j in m.Cities if j != n)
         inn  = sum(m.x[v, i, n] for i in m.Cities if i != n)
         if n == init_loc[v]:
-            # Başlangıçta: çıkış - giriş >= 0 (yol başlayabilir), ayrıca bağlanırlık akışı bunu düzenler
             return outn >= inn
         return outn == inn
     model.vehicle_degree_balance = Constraint(model.Vehicles, model.Cities, rule=vehicle_degree_balance)
 
-    # Tek zincir için bağlanırlık akışı:
-    # M sabiti
+    # Tek zincir bağlanırlık akışı
     BIGM = len(cities)
-    # f <= M * x
     def flow_cap(m, v, i, j):
         if i == j: return Constraint.Skip
         return m.f[v, i, j] <= BIGM * m.x[v, i, j]
     model.flow_cap = Constraint(model.Vehicles, model.Cities, model.Cities, rule=flow_cap)
 
-    # Akış korunumları: init node kaynak, diğer ziyaret edilenler tüketici
     def flow_conserv(m, v, n):
         out_flow = sum(m.f[v, n, j] for j in m.Cities if j != n)
         in_flow  = sum(m.f[v, i, n] for i in m.Cities if i != n)
         if n == init_loc[v]:
-            # kaynak = ziyaret edilen düğüm sayısı (init hariç)
             rhs = sum(m.w[v, k] for k in m.Cities if k != n)
             return out_flow - in_flow == rhs
         else:
-            # ziyaret edildiyse 1 birim tüket
             return out_flow - in_flow == - m.w[v, n]
     model.flow_conserv = Constraint(model.Vehicles, model.Cities, rule=flow_conserv)
 
@@ -352,23 +329,17 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
 # Çözümden insan-okur sonuç üretimi
 # =========================================================
 def _order_path_from_edges(edges: List[Tuple[str, str]], start: str) -> List[Tuple[str, str]]:
-    """edges: (i,j) listesi, tekli yol varsayımıyla sıralı hale getirir."""
     if not edges: return []
     nxt = {}
-    indeg, outdeg = {}, {}
+    indeg = {}
     for i, j in edges:
         nxt[i] = j
-        outdeg[i] = outdeg.get(i, 0) + 1
         indeg[j]  = indeg.get(j, 0) + 1
-    # başlangıcı bul
     cur = start
     if cur not in nxt:
-        # eğer başlangıç listede yoksa, herhangi bir ucu başa al
         candidates = [i for (i, _) in edges if i not in indeg]
-        if candidates: cur = candidates[0]
-        else: cur = edges[0][0]
-    ordered = []
-    visited = set()
+        cur = candidates[0] if candidates else edges[0][0]
+    ordered, visited = [], set()
     while cur in nxt and (cur, nxt[cur]) not in visited:
         step = (cur, nxt[cur])
         ordered.append(step)
@@ -383,7 +354,6 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
     packages    = meta["packages"]
     distances   = meta["distances"]
     travel_time = meta["travel_time"]
-    MINUTIL     = meta["MINUTIL_PENALTY"]
 
     res = {"objective": float(value(model.obj))}
 
@@ -396,7 +366,7 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
                     transport += float(value(model.TransportCost[v])) * float(value(model.Distance[i, j]))
     fixed = sum(float(value(model.FixedCost[v])) for v in vehicles if value(model.z[v]) > 0.5)
     lateness_cost = sum(float(value(model.LatePenalty[p])) * float(value(model.lateness[p])) for p in model.Packages)
-    minutil_pen = MINUTIL_PENALTY * sum(
+    minutil_pen = float(value(model.MinUtilPenalty)) * sum(
         float(value(model.minutil_shortfall[v, i, j]))
         for v in vehicles for i in cities for j in cities if i != j
     )
@@ -408,20 +378,18 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
         "min_util_gap": float(minutil_pen),
     }
 
-    # Araç rotaları (sıralı)
+    # Araç rotaları
+    def ordered_edges_for_vehicle(vname: str):
+        v_edges = [(i, j) for i in cities for j in cities if i != j and value(model.x[vname, i, j]) > 0.5]
+        return _order_path_from_edges(v_edges, meta["initial_locations"][vname])
+
     vehicle_routes = []
     for v in sorted(vehicles):
-        # v için kullanılan kenarlar
-        v_edges = [(i, j) for i in cities for j in cities if i != j and value(model.x[v, i, j]) > 0.5]
-        if not v_edges: continue
-
-        # sıraya diz: init'ten başlayarak
-        ordered = _order_path_from_edges(v_edges, meta["initial_locations"][v])
-
+        ordered = ordered_edges_for_vehicle(v)
+        if not ordered: continue
         legs = []
         for (i, j) in ordered:
-            moved = []
-            load  = 0.0
+            moved, load = [], 0.0
             for p in model.Packages:
                 if value(model.y[p, v, i, j]) > 0.5:
                     moved.append(p)
@@ -437,15 +405,13 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
         vehicle_routes.append({"vehicle": v, "capacity": float(value(model.VehicleCapacity[v])), "legs": legs})
     res["vehicle_routes"] = vehicle_routes
 
-    # Paket özetleri (sıralı rota ve zamanlar)
+    # Paket özetleri
     pkg_summaries = []
     for pid, pdata in packages.items():
         o, d = pdata["baslangic"], pdata["hedef"]
         ready, deadline = pdata["ready_hour"], pdata["deadline_hour"]
 
-        # Paket kenarları (v bazında birleştir)
         edges = []
-        steps = []
         for v in model.Vehicles:
             for i in cities:
                 for j in cities:
@@ -453,27 +419,19 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
                         edges.append((i, j))
         ordered = _order_path_from_edges(edges, o)
 
-        ttot = 0.0
+        ttot, cur_time = 0.0, ready
         timeline = []
-        cur_time = ready
         for (i, j) in ordered:
-            # bu kenarı hangi araç taşıdıysa onu bul
             veh = None; dur = None; km = float(distances[(i, j)])
             for v in model.Vehicles:
                 if value(model.y[pid, v, i, j]) > 0.5:
-                    veh = v
-                    dur = float(travel_time[(v, i, j)])
-                    break
+                    veh = v; dur = float(travel_time[(v, i, j)]); break
             if dur is None:  # güvenlik
-                # hız fark etmeksizin km/speed ~ süre
-                anyv = vehicles[0]
-                dur = float(travel_time[(anyv, i, j)])
-            start_t = cur_time
-            end_t   = cur_time + dur
+                anyv = vehicles[0]; dur = float(travel_time[(anyv, i, j)])
+            start_t, end_t = cur_time, cur_time + dur
             timeline.append({"vehicle": veh, "from": i, "to": j, "km": km, "duration_h": dur,
                              "start_h": round(start_t, 3), "end_h": round(end_t, 3)})
-            cur_time = end_t
-            ttot += dur
+            cur_time = end_t; ttot += dur
 
         arrival = ready + ttot
         late_h  = max(0.0, arrival - deadline)
@@ -703,5 +661,3 @@ def solve():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
-
-
