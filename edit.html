@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="tr" data-bs-theme="light">
 <head>
@@ -121,11 +120,9 @@
                   <button id="addPkgBtn" type="button" class="btn btn-sm btn-outline-primary">
                     <i class="bi bi-plus-circle me-1"></i>Ekle
                   </button>
-                  <!-- Yeni: Kamera (Görselden Ekle) -->
-                  <button id="aiPkgBtn" type="button" class="btn btn-sm btn-outline-dark" title="Görselden paket ekle">
-                    <i class="bi bi-camera-fill me-1"></i>Kamera
+                  <button id="addPkgCameraBtn" type="button" class="btn btn-sm btn-outline-secondary" title="Görselden Ekle">
+                    <i class="bi bi-camera"></i>
                   </button>
-                  <input id="imgInput" type="file" accept="image/*" capture="environment" class="d-none" />
                   <button id="clearPkgsBtn" type="button" class="btn btn-sm btn-outline-danger">
                     <i class="bi bi-trash me-1"></i>Tümünü Temizle
                   </button>
@@ -148,7 +145,7 @@
                   <tbody id="pkgTbody"></tbody>
                 </table>
               </div>
-              <div class="form-text">Şehirler açılır menüden seçilir; diğer alanlar sayı olarak girilir. Kamera ile etiket/irsaliye fotoğrafından otomatik doldurabilirsiniz.</div>
+              <div class="form-text">Şehirler açılır menüden seçilir; diğer alanlar sayı olarak girilir.</div>
             </div>
 
             <div class="mb-3 col-12 col-md-6">
@@ -178,6 +175,9 @@
       </div>
     </div>
   </main>
+
+  <!-- Görsel seçim input'u (kamera/galeri) -->
+  <input id="pkgImageInput" type="file" accept="image/*" capture="environment" class="d-none">
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script>
@@ -252,6 +252,14 @@
     return cities.map(c=>`<option value="${c}">${c}</option>`).join("");
   }
 
+  function autoPkgId(){
+    const base = "P";
+    let k = 1;
+    const ids = new Set(Array.from(document.querySelectorAll("#pkgTbody .pkg-id")).map(i=>i.value.trim()));
+    while(ids.has(base+k)) k++;
+    return base + k;
+  }
+
   function addPackageRow(pkg=null){
     const tr = document.createElement("tr");
     const idVal = pkg?.id ?? autoPkgId();
@@ -280,14 +288,6 @@
       selO.addEventListener(evt, refreshPreview);
       selD.addEventListener(evt, refreshPreview);
     });
-  }
-
-  function autoPkgId(){
-    const base = "P";
-    let k = 1;
-    const ids = new Set(Array.from(document.querySelectorAll("#pkgTbody .pkg-id")).map(i=>i.value.trim()));
-    while(ids.has(base+k)) k++;
-    return base + k;
   }
 
   function collectPackages(){
@@ -320,6 +320,45 @@
     });
   }
 
+  // --- Görselden paket ekleme (AI) ---
+  function fileToDataURL(file){
+    return new Promise((resolve, reject)=>{
+      const r = new FileReader();
+      r.onload = ()=> resolve(r.result); // data:image/...;base64,AAAA
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function addPackageFromImage(dataUrl){
+    try{
+      setStatus("Görsel yorumlanıyor…", "secondary");
+      const cities = JSON.parse($("cities").value || "[]");
+      const res = await fetch("/ai-pack", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_b64: dataUrl,
+          cities,
+          defaults: { ready_hour: 0, deadline_hour: 36, ceza: 120 }
+        })
+      });
+      const js = await res.json();
+      if(!res.ok || js.ok === false) throw new Error(js.error || "AI hatası");
+      const pkg = js.package;
+
+      const used = new Set(Array.from(document.querySelectorAll("#pkgTbody .pkg-id")).map(i=>i.value.trim()));
+      if(used.has(pkg.id)){ pkg.id = autoPkgId(); }
+
+      addPackageRow(pkg);
+      refreshPreview();
+      setStatus("Görselden paket eklendi ✔️", "success");
+    }catch(err){
+      console.error(err);
+      setStatus("Görselden okuma hatası: " + err.message, "danger");
+    }
+  }
+
   // --- Dataset derleme/kayıt ---
   function buildJSON(){
     const data = {
@@ -333,11 +372,9 @@
       minutil_penalty: parseFloat($("minutil_penalty").value)
     };
     if(!data.main_depot) throw new Error("Ana Depo boş olamaz.");
-    // Araç konumlarında şehir doğrulaması
     for(const [k,city] of Object.entries(data.vehicle_initial_locations||{})){
       if(!(data.cities||[]).includes(city)) data.vehicle_initial_locations[k] = data.main_depot;
     }
-    // Paket şehir doğrulaması
     for(const p of data.packages){
       if(!(data.cities||[]).includes(p.baslangic)) p.baslangic = data.main_depot;
       if(!(data.cities||[]).includes(p.hedef))     p.hedef     = data.main_depot;
@@ -363,11 +400,9 @@
       $("distances").value = JSON.stringify(data.distances ?? [], null, 2);
       $("minutil_penalty").value = (data.minutil_penalty ?? 14).toString();
 
-      // Araç konumları
       window.__vehInitLoc = data.vehicle_initial_locations || {};
       renderVehicleLocationsTable();
 
-      // Paketler tablosu
       $("pkgTbody").innerHTML = "";
       (data.packages||[]).forEach(p=> addPackageRow({
         id: p.id,
@@ -409,96 +444,6 @@
     catch(e){ $("preview").textContent = "Önizleme derlenemedi:\n"+e.message; }
   }
 
-  // --- Vision ile paket ekleme ---
-  $("aiPkgBtn")?.addEventListener("click", ()=> $("imgInput")?.click());
-
-  $("imgInput")?.addEventListener("change", async (e)=>{
-    const file = e.target.files?.[0];
-    if(!file) return;
-    try{
-      setStatus("Görsel işleniyor ve alanlar çıkarılıyor…", "info");
-      const b64 = await fileToBase64(file);
-      const context = safeBuildContext();
-      const messages = [{
-        role: "user",
-        content: [
-          { type: "text", text:
-`Bu bir paket etiketi/irsaliye görseli. Aşağıdaki alanları yalın JSON olarak çıkar:
-- id (string, yoksa otomatik üret: "AUTO")
-- baslangic (şehir)
-- hedef (şehir)
-- agirlik (kg, sayı)
-- ready_hour (saat, sayı; yoksa 0)
-- deadline_hour (saat, sayı; yoksa 36)
-- ceza (TL/saat, sayı; yoksa 120)
-Şehir adlarını şu listeden seç: ${JSON.stringify(context.cities||[])}.
-Sadece tek bir JSON nesnesi döndür.` },
-          { type: "input_image", image_url: { url: b64 } }
-        ]
-      }];
-
-      const res = await fetch("/chat", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ messages, context })
-      });
-      const raw = await res.text();
-      if(!(res.headers.get("content-type")||"").includes("application/json")) throw new Error("Sunucudan JSON yerine farklı içerik geldi.");
-      const data = JSON.parse(raw);
-      if(!res.ok || data.ok===false) throw new Error(data.error || "Model yanıtı başarısız.");
-
-      const obj = tryParseFirstJSON(data.answer);
-      if(!obj) throw new Error("Görselden JSON çıkarılamadı.");
-      // Alanları normalize et
-      const pkg = {
-        id: (obj.id && obj.id!=="AUTO") ? String(obj.id) : autoPkgId(),
-        baslangic: String(obj.baslangic||""),
-        hedef: String(obj.hedef||""),
-        agirlik: num(obj.agirlik, 0),
-        ready_hour: num(obj.ready_hour, 0),
-        deadline_hour: num(obj.deadline_hour, 36),
-        ceza: num(obj.ceza, 120)
-      };
-      addPackageRow(pkg);
-      refreshPreview();
-      setStatus("Görselden paket eklendi ✔️", "success");
-      e.target.value = "";
-    }catch(err){
-      console.error(err);
-      setStatus("Görselden okuma hatası: " + err.message, "danger");
-      e.target.value = "";
-    }
-  });
-
-  function num(v, d){ const n = Number(v); return Number.isFinite(n) ? n : d; }
-  function safeBuildContext(){
-    try{
-      return {
-        cities: JSON.parse($("cities").value),
-        main_depot: $("main_depot").value.trim()
-      };
-    }catch(_){ return { cities: [], main_depot: "" }; }
-  }
-  function tryParseFirstJSON(txt){
-    if(!txt) return null;
-    // ```json ... ``` içinden yakala
-    const m = txt.match(/```json([\s\S]*?)```/i);
-    let body = m ? m[1] : txt;
-    // İlk { ... } bloğunu ayıkla
-    const start = body.indexOf("{");
-    const end   = body.lastIndexOf("}");
-    if(start>=0 && end>start){ body = body.slice(start, end+1); }
-    try{ return JSON.parse(body); }catch(_){ return null; }
-  }
-  function fileToBase64(file){
-    return new Promise((resolve, reject)=>{
-      const reader = new FileReader();
-      reader.onload = ()=> resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  }
-
   // UI eventleri
   $("reloadBtn")?.addEventListener("click", loadDataset);
   $("refreshPreviewBtn")?.addEventListener("click", refreshPreview);
@@ -515,7 +460,6 @@ Sadece tek bir JSON nesnesi döndür.` },
     }catch(e){ setStatus("JSON indirilemedi: "+e.message, "danger"); }
   });
 
-  // Araç listesi değiştiğinde konum seçimlerini yeniden üret
   $("vehicle_count")?.addEventListener("input", ()=>{
     try{ window.__vehInitLoc = collectVehicleInitialLocations(); }catch(_){}
     renderVehicleLocationsTable(); refreshPreview();
@@ -542,8 +486,20 @@ Sadece tek bir JSON nesnesi döndür.` },
 
   // Paket butonları
   $("addPkgBtn")?.addEventListener("click", ()=>{ addPackageRow(); refreshPreview(); });
-  $("clearPkgsBtn")?.addEventListener("click", ()=>{
-    $("pkgTbody").innerHTML=""; refreshPreview();
+  $("clearPkgsBtn")?.addEventListener("click", ()=>{ $("pkgTbody").innerHTML=""; refreshPreview(); });
+
+  // Kamera → dosya seçtir
+  $("addPkgCameraBtn")?.addEventListener("click", ()=>{ $("pkgImageInput").click(); });
+  // Dosya seçildi
+  $("pkgImageInput")?.addEventListener("change", async (e)=>{
+    const f = e.target.files && e.target.files[0];
+    if(!f) return;
+    try{
+      const dataUrl = await fileToDataURL(f);
+      await addPackageFromImage(dataUrl);
+    }finally{
+      e.target.value = "";
+    }
   });
 
   (function(){
@@ -559,4 +515,3 @@ Sadece tek bir JSON nesnesi döndür.` },
   </script>
 </body>
 </html>
-
