@@ -1,5 +1,3 @@
-  <!-- DEMODUR, AKTİF DEĞİLDİR -->
-
 <!doctype html>
 <html lang="tr" data-bs-theme="dark">
 <head>
@@ -65,6 +63,11 @@
       box-shadow: 0 16px 28px rgba(13,110,253,.25);
       background: linear-gradient(135deg, rgba(13,110,253,.24), rgba(111,66,193,.20));
     }
+    .btn-glass:disabled{
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
     .form-control{
       background: color-mix(in oklab, var(--bs-body-bg) 70%, transparent);
       border:1px solid var(--glass-bd);
@@ -81,14 +84,20 @@
       width:40px; height:40px; border-radius:50%; display:grid; place-items:center;
       border:1px solid var(--glass-bd); background:var(--glass-bg);
       backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      transition: transform .15s ease;
+    }
+    .btn-circle:hover{
+      transform: scale(1.05);
     }
     .alert-glass{
       border:1px solid color-mix(in oklab, var(--bs-danger) 35%, transparent);
       background: color-mix(in oklab, var(--bs-danger-bg-subtle) 35%, transparent);
+      color: var(--bs-danger-text-emphasis);
     }
     .success-glass{
       border:1px solid color-mix(in oklab, var(--bs-success) 35%, transparent);
       background: color-mix(in oklab, var(--bs-success-bg-subtle) 35%, transparent);
+      color: var(--bs-success-text-emphasis);
     }
     @media (max-width: 480px){ .p-card{ padding:1.25rem !important; } }
   </style>
@@ -136,13 +145,13 @@
 
             <div class="mb-3">
               <label class="form-label small text-secondary">Şifre</label>
-              <input id="password" type="password" class="form-control form-control-lg" placeholder="En az 8 karakter" minlength="8" required>
+              <input id="password" type="password" class="form-control form-control-lg" placeholder="En az 8 karakter" minlength="8" autocomplete="new-password" required>
               <div class="invalid-feedback">Şifreniz en az 8 karakter olmalı.</div>
             </div>
 
             <div class="mb-3">
               <label class="form-label small text-secondary">Şifre (Tekrar)</label>
-              <input id="password2" type="password" class="form-control form-control-lg" placeholder="Şifrenizi tekrar girin" minlength="8" required>
+              <input id="password2" type="password" class="form-control form-control-lg" placeholder="Şifrenizi tekrar girin" minlength="8" autocomplete="new-password" required>
               <div class="invalid-feedback">Şifreler eşleşmiyor.</div>
             </div>
 
@@ -154,8 +163,8 @@
               <div class="invalid-feedback">Devam etmek için koşulları kabul edin.</div>
             </div>
 
-            <button id="regBtn" class="btn btn-glass btn-lg w-100">
-              <i class="bi bi-person-plus me-1"></i> Kayıt Ol
+            <button id="regBtn" type="submit" class="btn btn-glass btn-lg w-100">
+              <i class="bi bi-person-plus me-1"></i> <span id="btnText">Kayıt Ol</span>
             </button>
           </form>
 
@@ -179,6 +188,8 @@
     const terms = $("terms");
     const alertBox = $("alert");
     const okBox = $("ok");
+    const regBtn = $("regBtn");
+    const btnText = $("btnText");
 
     function showErr(msg){
       alertBox.textContent = msg;
@@ -190,17 +201,32 @@
       okBox.classList.remove("d-none");
       alertBox.classList.add("d-none");
     }
+    function hideAlerts(){
+      alertBox.classList.add("d-none");
+      okBox.classList.add("d-none");
+    }
 
     // Theme toggle
     (function(){
       const btn = $("themeToggle");
+      const icon = btn?.querySelector("i");
       const root = document.documentElement;
       const saved = (()=>{ try{ return localStorage.getItem("ui-theme"); }catch(_){}})();
       if(saved) root.setAttribute("data-bs-theme", saved);
+      
+      function updateIcon(){
+        const theme = root.getAttribute("data-bs-theme") || "dark";
+        if(icon){
+          icon.className = theme === "dark" ? "bi bi-moon-stars" : "bi bi-sun";
+        }
+      }
+      updateIcon();
+      
       btn?.addEventListener("click", ()=>{
         const cur = root.getAttribute("data-bs-theme") || "dark";
         const nxt = cur === "dark" ? "light" : "dark";
         root.setAttribute("data-bs-theme", nxt);
+        updateIcon();
         try{ localStorage.setItem("ui-theme", nxt); }catch(_){}
       });
     })();
@@ -217,30 +243,59 @@
 
     form?.addEventListener("submit", async (e)=>{
       e.preventDefault();
+      hideAlerts();
       validatePasswords();
       form.classList.add("was-validated");
-      if(!form.checkValidity()) return;
+      
+      if(!form.checkValidity()){
+        showErr("Lütfen tüm alanları doğru şekilde doldurun.");
+        return;
+      }
+
+      // Button loading state
+      regBtn.disabled = true;
+      btnText.textContent = "Kayıt yapılıyor...";
 
       try{
-        const res = await fetch("/auth/register", {
+        const res = await fetch("/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: nameEl.value.trim(),
-            email: emailEl.value.trim(),
-            password: pwd.value,
-            accept_terms: terms.checked
+            email: emailEl.value.trim().toLowerCase(),
+            password: pwd.value
           })
         });
+        
         const data = await res.json().catch(()=>({}));
-        if(!res.ok || data.ok === false) throw new Error(data.error || `Kayıt başarısız (HTTP ${res.status})`);
-        showOk("Kayıt başarılı! Giriş sayfasına yönlendiriliyorsunuz…");
-        setTimeout(()=> location.href = "login.html", 900);
-      }catch(err){ showErr(err.message); }
+        
+        if(!res.ok || data.ok === false){
+          throw new Error(data.error || `Kayıt başarısız (HTTP ${res.status})`);
+        }
+        
+        showOk("✓ Kayıt başarılı! Giriş sayfasına yönlendiriliyorsunuz...");
+        form.reset();
+        form.classList.remove("was-validated");
+        
+        setTimeout(()=> {
+          window.location.href = "login.html";
+        }, 1500);
+        
+      }catch(err){
+        showErr("✗ " + err.message);
+        regBtn.disabled = false;
+        btnText.textContent = "Kayıt Ol";
+      }
     });
 
-    $("regBtn")?.addEventListener("click", (e)=>{ e.preventDefault(); form.requestSubmit(); });
-    [nameEl, emailEl, pwd, pwd2].forEach(el=> el?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") form.requestSubmit(); }));
+    // Enter key support
+    [nameEl, emailEl, pwd, pwd2].forEach(el=> {
+      el?.addEventListener("keydown", (e)=>{ 
+        if(e.key==="Enter" && !regBtn.disabled) {
+          form.requestSubmit();
+        }
+      });
+    });
   </script>
 </body>
 </html>
