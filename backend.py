@@ -198,7 +198,7 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
     # Gecikme
     model.lateness = Var(model.Packages, domain=NonNegativeReals)
     # Min. doluluk açığı
-    model.minutil_shortfall = Var(model.Vehicles, domain=NonNegativeReals)
+    model.minutil_shortfall = Var(model.Vehicles, model.Cities, model.Cities, domain=NonNegativeReals)
 
     # Araç-şehir ziyaret bayrağı
     model.w = Var(model.Vehicles, model.Cities, domain=Binary)
@@ -211,7 +211,11 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
                         for v in m.Vehicles for i in m.Cities for j in m.Cities if i != j)
         fixed     = sum(m.FixedCost[v] * m.z[v] for v in m.Vehicles)
         late      = sum(m.LatePenalty[p] * m.lateness[p] for p in m.Packages)
-        minutil   = MINUTIL_PENALTY * sum(m.minutil_shortfall[v] for v in m.Vehicles)
+        minutil = MINUTIL_PENALTY * sum(
+            m.minutil_shortfall[v, i, j]
+            for v in m.Vehicles for i in m.Cities for j in m.Cities if i != j
+        )
+
 
         # Paket kenarlarına küçük mesafe maliyeti -> gereksiz paket döngüleri açılmasın
         eps_cost  = PACKAGE_EPS_TL_PER_KM * sum(m.Distance[i, j] * m.y[p, v, i, j]
@@ -269,16 +273,18 @@ def build_model(payload: Dict[str, Any]) -> Tuple[ConcreteModel, Dict[str, Any]]
     model.capacity_constraint = Constraint(model.Vehicles, model.Cities, model.Cities, rule=capacity_rule)
 
     # Min. doluluk (ana depodan çıkışlar için soft)
-    def min_utilization_soft_rule(m, v):
-        start_city = init_loc[v]  # her aracın gerçek başlangıç şehri
-        departures = sum(m.x[v, start_city, j] for j in m.Cities if j != start_city)  # 0..N
-        loaded = sum(
-            m.PackageWeight[p] * m.y[p, v, start_city, j]
-            for p in m.Packages for j in m.Cities if j != start_city
-        )
-        target = m.MinUtilization[v] * m.VehicleCapacity[v] * departures
-        return loaded + m.minutil_shortfall[v] >= target
-    model.min_utilization_soft = Constraint(model.Vehicles, rule=min_utilization_soft_rule)    
+# Her kenar (v,i->j) için: taşınan_yük + shortfall ≥ min_util * kapasite * x[v,i,j]
+    def min_utilization_soft_arc_rule(m, v, i, j):
+        if i == j:
+            return Constraint.Skip
+        carried = sum(m.PackageWeight[p] * m.y[p, v, i, j] for p in m.Packages)
+        target  = m.MinUtilization[v] * m.VehicleCapacity[v] * m.x[v, i, j]
+        return carried + m.minutil_shortfall[v, i, j] >= target
+
+    model.min_utilization_soft_arc = Constraint(
+        model.Vehicles, model.Cities, model.Cities, rule=min_utilization_soft_arc_rule
+    )
+   
 
     # Araç şehir ziyaret bayrakları: eğer bir kente giriyor/çıkıyorsa w=1
     def visit_out_imp(m, v, n):
@@ -390,7 +396,10 @@ def extract_results(model: ConcreteModel, meta: Dict[str, Any]) -> Dict[str, Any
                     transport += float(value(model.TransportCost[v])) * float(value(model.Distance[i, j]))
     fixed = sum(float(value(model.FixedCost[v])) for v in vehicles if value(model.z[v]) > 0.5)
     lateness_cost = sum(float(value(model.LatePenalty[p])) * float(value(model.lateness[p])) for p in model.Packages)
-    minutil_pen = MINUTIL * sum(float(value(model.minutil_shortfall[v])) for v in vehicles)
+    minutil_pen = MINUTIL_PENALTY * sum(
+        float(value(model.minutil_shortfall[v, i, j]))
+        for v in vehicles for i in cities for j in cities if i != j
+    )
 
     res["cost_breakdown"] = {
         "transport": transport,
@@ -694,4 +703,5 @@ def solve():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
