@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="tr" data-bs-theme="light">
 <head>
@@ -77,15 +78,15 @@
                 <label for="main_depot" class="form-label">Ana Depo</label>
                 <input id="main_depot" class="form-control" placeholder="İstanbul" />
               </div>
-              <div class="col-12 col-md-6">
-                <label for="periods" class="form-label">Dönem Sayısı (t=1..N)</label>
-                <input id="periods" type="number" min="1" class="form-control" placeholder="6" />
-              </div>
             </div>
 
             <div class="mb-3">
               <label for="vehicle_types" class="form-label">Araç Tipleri (JSON)</label>
-              <textarea id="vehicle_types" class="form-control" rows="6" placeholder='{"Küçük": {...}}'></textarea>
+              <textarea id="vehicle_types" class="form-control" rows="8" placeholder='{
+  "Küçük": { "kapasite": 200, "maliyet_km": 2.5, "min_doluluk": 0.40, "sabit_maliyet": 150, "hiz_kmh": 70 },
+  "Orta":  { "kapasite": 420, "maliyet_km": 4.1, "min_doluluk": 0.45, "sabit_maliyet": 320, "hiz_kmh": 65 }
+}'></textarea>
+              <div class="form-text"><code>hiz_kmh</code> zorunludur (ortalama hız, km/s).</div>
             </div>
 
             <div class="mb-3">
@@ -114,12 +115,16 @@
 
             <div class="mb-3">
               <label for="packages" class="form-label">Paketler (liste)</label>
-              <textarea id="packages" class="form-control" rows="7" placeholder='[{"id":"P1", ...}]'></textarea>
+              <textarea id="packages" class="form-control" rows="9" placeholder='[
+  { "id":"P1", "baslangic":"Ankara",    "hedef":"İzmir",    "agirlik":120, "ready_hour":0, "deadline_hour":36, "ceza":120 },
+  { "id":"P2", "baslangic":"İzmir",     "hedef":"Ankara",   "agirlik":90,  "ready_hour":0, "deadline_hour":36, "ceza":120 }
+]'></textarea>
+              <div class="form-text"><code>ready_hour</code> ve <code>deadline_hour</code> saat cinsindendir. Gecikme serbesttir ancak ceza uygulanır.</div>
             </div>
 
             <div class="mb-3 col-12 col-md-6">
               <label for="minutil_penalty" class="form-label">Min. Doluluk Ceza (TL/kg)</label>
-              <input id="minutil_penalty" class="form-control" type="number" step="0.01" placeholder="10.0" />
+              <input id="minutil_penalty" class="form-control" type="number" step="0.01" placeholder="14" />
             </div>
 
             <div class="mt-3">
@@ -227,7 +232,6 @@
     const data = {
       cities: parseJSONField("cities","Şehirler"),
       main_depot: $("main_depot").value.trim(),
-      periods: parseInt($("periods").value,10),
       vehicle_types: parseJSONField("vehicle_types","Araç Tipleri"),
       vehicle_count: parseJSONField("vehicle_count","Araç Sayıları"),
       vehicle_initial_locations: collectVehicleInitialLocations(),
@@ -236,7 +240,6 @@
       minutil_penalty: parseFloat($("minutil_penalty").value)
     };
     if(!data.main_depot) throw new Error("Ana Depo boş olamaz.");
-    if(!Number.isFinite(data.periods) || data.periods<1) throw new Error("Dönem sayısı 1 veya daha büyük olmalı.");
     // Güvenlik: şehir doğrulaması (seçilmiş şehir listede yoksa ana depoya çek)
     for(const [k,city] of Object.entries(data.vehicle_initial_locations||{})){
       if(!(data.cities||[]).includes(city)) data.vehicle_initial_locations[k] = data.main_depot;
@@ -257,12 +260,11 @@
       }
       $("cities").value = JSON.stringify(data.cities ?? [],  null, 0);
       $("main_depot").value = data.main_depot ?? "";
-      $("periods").value = data.periods ?? 1;
       $("vehicle_types").value = JSON.stringify(data.vehicle_types ?? {}, null, 2);
       $("vehicle_count").value = JSON.stringify(data.vehicle_count ?? {}, null, 2);
       $("distances").value = JSON.stringify(data.distances ?? [], null, 2);
       $("packages").value = JSON.stringify(data.packages ?? [], null, 2);
-      $("minutil_penalty").value = (data.minutil_penalty ?? 10).toString();
+      $("minutil_penalty").value = (data.minutil_penalty ?? 14).toString();
 
       // Araç konumları state'i ve tablo
       window.__vehInitLoc = data.vehicle_initial_locations || {};
@@ -319,10 +321,11 @@
     // mevcut seçimleri sakla
     try{ window.__vehInitLoc = collectVehicleInitialLocations(); }catch(_){}
     renderVehicleLocationsTable();
+    refreshPreview();
   });
   // Şehir listesi ya da ana depo değişince seçenekleri/varsayılanları güncelle
-  $("cities")?.addEventListener("input", renderVehicleLocationsTable);
-  $("main_depot")?.addEventListener("input", renderVehicleLocationsTable);
+  $("cities")?.addEventListener("input", ()=>{ renderVehicleLocationsTable(); refreshPreview(); });
+  $("main_depot")?.addEventListener("input", ()=>{ renderVehicleLocationsTable(); refreshPreview(); });
 
   // Hepsini ana depoya set et
   $("fillDepotBtn")?.addEventListener("click", ()=>{
